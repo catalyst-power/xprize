@@ -1,28 +1,18 @@
 import { NextResponse } from 'next/server';
-import { requireAppAuth } from '@/src/lib/app-auth';
+import { getSession } from '@/src/lib/auth';
 
 /**
  * GET /api/whoami
  *
- * Demo route: resolves the caller's identity via app-auth handshake.
- * Requires X-App-DID + X-App-Authorization (or Bearer <app-token>).
- *
- * Returns 401 if headers are missing or invalid.
- * Returns 200 with { appDid, userDid, scopes } on success.
+ * Returns the current session user (did, displayName, handle, avatar, attestationId)
+ * or 401 if no session cookie is present/valid.
  */
-export async function GET(request: Request) {
-  const result = await requireAppAuth(request);
+export async function GET() {
+  const user = await getSession();
 
-  if (!result.ok) {
-    return NextResponse.json(
-      { error: result.error },
-      { status: result.status }
-    );
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  return NextResponse.json({
-    appDid: result.auth.appDid,
-    userDid: result.auth.userDid,
-    scopes: result.auth.scopes,
-  });
+  return NextResponse.json(user);
 }
