@@ -1,115 +1,78 @@
-# AgriFortress — a third-party app on Imajin
+# AgriFortress
 
-**Entrant:** Catalyst Agri-Innovations Society (CAIS) · **Platform:** Imajin (sovereign-tech kernel)
-**Contest:** XPRIZE "Build with Gemini" · **Deadline:** Aug 17, 2026, 1:00 PM PT
+**Entrant:** Catalyst Agri-Innovations Society (CAIS)  
+**Platform:** Imajin (sovereign-tech kernel)  
+**Contest:** XPRIZE "Build with Gemini" · Deadline: Aug 17, 2026
 
-AgriFortress — *farm to farm to table, supply-chain registry.* This repository **is the app** — a real, arms-length
-third-party application that composes the Imajin platform **only through its public app surface**
-(`requireAppAuth` + the documented kernel API). It runs on **external infrastructure** (Catalyst's own Google Cloud),
-not inside the Imajin monorepo or server.
+A third-party external client app that instruments a real farm-to-farm supply
+chain — eggs from Misty Meadows to Grace Harbour Farms — using Imajin's
+public app-auth surface and signed records.
 
-> **Why this matters:** every Imajin app to date is first-party (same repo, same server, privileged access). This
-> is the **first true external integrator** — the honest test that an outside party can build on Imajin *without
-> being inside it*. If this app can do everything it needs through app-auth and the public API alone, the
-> federated-app boundary is real.
+## Quick start
 
----
+```bash
+# 1. Install dependencies
+pnpm install
 
-## The source of truth is the supplier's
+# 2. Copy env and fill in your values
+cp .env.example .env.local
 
-AgriFortress holds nothing authoritative. The signed supply records — what was delivered, by whom, to whom, and the
-settlement against it — are **the supplier's own signed records**, owned by the supplier, on their per-DID path.
+# 3. Run dev server
+pnpm dev
+```
 
-| Tier | What | Owns the truth? |
-|------|------|-----------------|
-| **Supplier's records** | signed markdown records (the canonical document), on the supplier's per-DID path — hosted today, a user-held vault eventually | ✅ **source of truth** |
-| **Imajin `supply` core** | a *projection* — index, query, reactor chains, settlement primitive | derived view |
-| **Connectors** | services the supplier *selects* (QuickBooks, …) to feed/read signals into their own records | the supplier's chosen instruments |
-| **This app** | thin render + gesture UX over the supplier's records | a lens |
+The app boots on `http://localhost:3402` by default.
 
-The supplier can walk with their records and everything still verifies. The platform holds the data **for** them,
-never **from** them.
+## Health check
 
----
+```bash
+curl http://localhost:3402/api/health
+# → { "status": "ok", "app": "agrifortress", "ts": "..." }
+```
 
-## How it composes Imajin (the integration contract)
+## App-auth demo
 
-The app holds **no kernel internals, no DB access, no in-process bus.** It talks to Imajin as an external client:
+```bash
+curl -H "X-App-DID: did:imajin:..." \
+     -H "X-App-Authorization: att_..." \
+     http://localhost:3402/api/whoami
+# → { "appDid": "...", "userDid": "...", "scopes": [...] }
+```
 
-- **Authenticates** as a registered app acting on behalf of a user — `X-App-DID` + `X-App-Authorization` (the
-  user's consent attestation) → Imajin returns `{ appDid, userDid, scopes }`. The app acts *for the human*, never
-  as itself; provenance pins to the user's DID.
-- **Drives the supply chain** through the `supply` domain API (kernel-side, app-auth-gated). Each call publishes a
-  `supply.*` event inside the kernel and runs its reactor chain (attestation → signed record on the supplier's path
-  → notify). *The app never touches the bus directly.*
-- **Settles** the one paid stage through the existing pay/settle endpoint with a `.fair` manifest.
-- **Reads** lot provenance via the supply read API (chained by `correlationId`).
+## Project structure
 
-Platform-side work (the `supply.*` events, the domain API, the stage table, the connector framework) is tracked in
-the Imajin monorepo: epic [`ima-jin/imajin-ai#1133`](https://github.com/ima-jin/imajin-ai/issues/1133) →
-[#1134](https://github.com/ima-jin/imajin-ai/issues/1134) (events),
-[#1136](https://github.com/ima-jin/imajin-ai/issues/1136) (lots),
-[#1135](https://github.com/ima-jin/imajin-ai/issues/1135) (the external-app API surface),
-[#1210](https://github.com/ima-jin/imajin-ai/issues/1210) (the accounting-connector framework + QuickBooks).
+```
+app/
+  api/
+    health/route.ts      # Liveness probe
+    whoami/route.ts      # App-auth identity resolution demo
+  layout.tsx             # Root layout
+  page.tsx               # Landing page
+  globals.css            # Tailwind entry
+src/
+  lib/
+    app-auth.ts          # Self-contained app-auth client
+```
 
----
+## Build
 
-## The MVP — eggs, Misty Meadows → Grace Harbour
+```bash
+pnpm build
+```
 
-A real, already-operating loop, instrumented (not invented):
+No workspace dependencies — this repo is standalone.
 
-1. **Misty Meadows** delivers eggs to **Grace Harbour Farms**, periodically. This already happens.
-2. The supplier fires a **QuickBooks invoice** to the buyer — their current step, unchanged.
-3. The supplier opens **AgriFortress** → **one confirm** → a signed **delivery receipt** (a goods-receipt on the
-   buyer's side). The provable record accrues on the side.
-4. AgriFortress reads the QuickBooks invoice through the **connector** as the **settlement signal** — the real
-   arms-length transaction — and settles it via `.fair`.
+## Integration contract
 
-> **The governing constraint:** AgriFortress can never make the drop-off slower than it is today. The receipt
-> generates from the gesture, not a form. The accounting system the supplier already uses stays exactly as it is —
-> we make the record provable, we don't replace their books.
+- **Authenticates** via `X-App-DID` + `X-App-Authorization` against the Imajin
+  kernel public API (`/auth/api/apps/token/verify`).
+- **Acts on-behalf-of** the user — `userDid` is the provenance anchor.
+- **Holds no kernel internals** — no DB access, no in-process bus, no monorepo
+  imports.
 
-> **Claim boundary:** signed attestations prove claims *consistent and attributed*, not *true about the physical
-> world*. All app copy and reporting reflect this.
-
----
-
-## What the judges score
-
-- A **deployed app** real participants use (AI-native operations — equally weighted).
-- A **3-minute demo video** showing a real loop end to end.
-- **Real arms-length revenue**, May–Aug, with a monthly breakdown.
-- An **AI-workflow-transformation** writeup.
+See `PROJECT.md` for architecture, build order, and design principles.
 
 ---
 
-## Repository layout
-
-| Path | Contents |
-|------|----------|
-| `/` (app) | The AgriFortress app — deployed to Catalyst's Google Cloud |
-| `docs/` | Architecture notes (incl. supply-chain-as-config), integration contract, runbook |
-| `deliverables/` | Demo video, submission writeups, revenue evidence |
-
-This repo owns the **app + contest artifacts**. The **kernel/platform** (identity, attestation, `.fair`, the
-`supply` domain, the connector framework) stays in `ima-jin/imajin-ai` — matching the IP split in the services
-agreement: platform IP is Imajin's, the CAIS app and its data are CAIS's. The supplier's signed records are the
-supplier's.
-
-Issues for the app build are tracked here (see the **AgriFortress app build** epic, `#1`).
-
----
-
-## Open inputs from CAIS (gate the demo/revenue, not the build)
-
-Pre-commit early — participants move slowly.
-
-- [ ] **Supplier's recording method** — how the delivery is recorded today (phone / text / paper / QuickBooks)
-- [ ] **QuickBooks Online** confirmed for the supplier (the connector assumes Online; desktop is an edge case)
-- [ ] **One real `.fair`-routed transaction** confirmed possible in-window
-- [ ] **Google Cloud project + billing** — Catalyst-owned (the app deploys here)
-- [ ] **App registration** — register this app with Imajin to obtain its `appDid` + scopes (`supply:write/read`)
-
----
-
-*Entrant: Catalyst Agri-Innovations Society · Platform: Imajin · Build with Gemini XPRIZE 2026*
+*Entrant: Catalyst Agri-Innovations Society · Platform: Imajin · Build with
+Gemini XPRIZE 2026*
