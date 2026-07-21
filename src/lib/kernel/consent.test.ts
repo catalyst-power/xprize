@@ -1,6 +1,20 @@
 import { describe, it, expect } from 'vitest';
 import { buildConsentUrl, AGRIFORTRESS_SCOPES } from './consent';
 
+describe('AGRIFORTRESS_SCOPES', () => {
+  it('contains the full set of scopes the app requires', () => {
+    const scopes = [...AGRIFORTRESS_SCOPES];
+    expect(scopes).toContain('supply:read');
+    expect(scopes).toContain('supply:write');
+    expect(scopes).toContain('profile:read');
+    expect(scopes).toContain('media:read');
+    expect(scopes).toContain('media:write');
+    expect(scopes).toContain('quickbooks:read');
+    expect(scopes).toContain('quickbooks:write'); // receiver confirmation writes invoice on supplier's behalf
+    expect(scopes).toHaveLength(7);
+  });
+});
+
 describe('buildConsentUrl', () => {
   it('uses the default kernel URL when not specified', () => {
     const url = buildConsentUrl({ appId: 'app_test' });
