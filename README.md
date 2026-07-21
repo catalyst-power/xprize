@@ -100,6 +100,81 @@ Issues for the app build are tracked here (see the **AgriFortress app build** ep
 
 ---
 
+## Development
+
+### Prerequisites
+
+- Node.js 22+
+- npm
+- A registered AgriFortress `appDid` + user consent `attestationId` (needed for kernel calls — see [Configuration](#configuration))
+
+### Getting started
+
+```bash
+git clone https://github.com/catalyst-power/xprize
+cd xprize
+npm install
+cp .env.example .env.local   # then fill in your values
+npm run dev                  # http://localhost:3000
+```
+
+### Configuration
+
+Copy `.env.example` to `.env.local` and populate the following:
+
+| Variable | Required | Description |
+|---|---|---|
+| `KERNEL_URL` | No | Imajin kernel base URL. Defaults to `https://imajin.ai`. |
+| `APP_DID` | Yes (kernel calls) | The app's registered DID (`did:imajin:…`). Obtained after app registration. |
+| `APP_PRIVATE_KEY` | Yes (kernel calls) | Ed25519 seed as hex (32 bytes = 64 hex chars). Generated at registration. **Never commit.** |
+| `APP_ATTESTATION_ID` | Yes (kernel calls) | The user's consent attestation ID, linking this app to a specific user's `supply:read/write` grant. |
+
+`APP_DID`, `APP_PRIVATE_KEY`, and `APP_ATTESTATION_ID` are obtained through the app registration and consent flow (issue [#3](https://github.com/catalyst-power/xprize/issues/3) in the epic). The app runs and serves the health route without them — only kernel-authenticated routes require them.
+
+### API
+
+#### `GET /api/health`
+
+Liveness check. No credentials required.
+
+```json
+{"status":"ok","version":"0.1.0","timestamp":"2026-07-21T00:48:33.763Z"}
+```
+
+#### `GET /api/health/kernel`
+
+Smoke call — completes the full app-auth handshake against the Imajin kernel and returns the resolved `userDid`. Requires `APP_DID`, `APP_PRIVATE_KEY`, and `APP_ATTESTATION_ID` to be set.
+
+**When configured:**
+```json
+{"status":"ok","userDid":"did:imajin:…","scopes":["supply:read","supply:write"],"kernelUrl":"https://imajin.ai"}
+```
+
+**When credentials are missing (503):**
+```json
+{"status":"misconfigured","error":"APP_DID, APP_PRIVATE_KEY, and APP_ATTESTATION_ID env vars are required"}
+```
+
+**Auth flow (for reference):** the app signs a challenge with its Ed25519 private key → `POST /auth/api/apps/token` on the kernel → receives a short-lived bearer token (10 min, auto-refreshed at 80% TTL) → `userDid` is decoded from the JWT `sub` claim. See `src/lib/kernel/auth.ts`.
+
+### Docker / Cloud Run
+
+The image uses Next.js [standalone output](https://nextjs.org/docs/app/api-reference/config/next-config-js/output) for a minimal runtime bundle.
+
+```bash
+docker build -t agrifortress .
+docker run -p 8080:8080 \
+  -e KERNEL_URL=https://imajin.ai \
+  -e APP_DID=did:imajin:... \
+  -e APP_PRIVATE_KEY=... \
+  -e APP_ATTESTATION_ID=... \
+  agrifortress
+```
+
+Cloud Run deployment target: Catalyst's GCP project (see `docs/` for runbook).
+
+---
+
 ## Open inputs from CAIS (gate the demo/revenue, not the build)
 
 Pre-commit early — participants move slowly.
