@@ -51,7 +51,7 @@ console.log(`      Public Key:   ${GREEN}${publicKeyHex}${RESET}`);
 console.log('');
 console.log(`    ${BOLD}Prod registration${RESET}  ${YELLOW}(separate entry, same public key is fine)${RESET}`);
 console.log('      Name:         AgriFortress');
-console.log('      Callback URL: https://<your-cloud-run-url>/api/auth/callback');
+console.log('      Callback URL: https://integrity.imajin.ai/api/auth/callback');
 console.log('      Scopes:       supply:read, supply:write');
 console.log(`      Public Key:   ${GREEN}${publicKeyHex}${RESET}`);
 console.log('');
