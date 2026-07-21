@@ -45,14 +45,14 @@ console.log('  Register ONCE per deployment target (dev and prod need separate A
 console.log('');
 console.log(`    ${BOLD}Dev registration${RESET}`);
 console.log('      Name:         AgriFortress (dev)');
-console.log('      Callback URL: http://localhost:3000/api/auth/callback');
-console.log('      Scopes:       supply:read, supply:write');
+console.log('      Callback URL: https://dev-integrity.imajin.ai/api/auth/callback');
+console.log('      Scopes:       supply:read, supply:write, profile:read, media:read, media:write, quickbooks:read');
 console.log(`      Public Key:   ${GREEN}${publicKeyHex}${RESET}`);
 console.log('');
 console.log(`    ${BOLD}Prod registration${RESET}  ${YELLOW}(separate entry, same public key is fine)${RESET}`);
 console.log('      Name:         AgriFortress');
 console.log('      Callback URL: https://integrity.imajin.ai/api/auth/callback');
-console.log('      Scopes:       supply:read, supply:write');
+console.log('      Scopes:       supply:read, supply:write, profile:read, media:read, media:write, quickbooks:read');
 console.log(`      Public Key:   ${GREEN}${publicKeyHex}${RESET}`);
 console.log('');
 

@@ -11,8 +11,23 @@
 
 const DEFAULT_KERNEL_URL = 'https://imajin.ai';
 
-/** Scopes AgriFortress requests from the Imajin kernel. */
-export const AGRIFORTRESS_SCOPES = ['supply:read', 'supply:write'] as const;
+/**
+ * Scopes AgriFortress requests from the Imajin kernel.
+ *
+ * supply:read/write   — delivery lots, stages, signed receipts
+ * profile:read        — show Scott's name/handle in the app
+ * media:read/write    — delivery photos
+ * quickbooks:read     — read QuickBooks invoice as the settlement signal
+ *                       (Scott fires the invoice himself; app only reads it)
+ */
+export const AGRIFORTRESS_SCOPES = [
+  'supply:read',
+  'supply:write',
+  'profile:read',
+  'media:read',
+  'media:write',
+  'quickbooks:read',
+] as const;
 
 export interface ConsentUrlOptions {
   /** Imajin kernel base URL. Defaults to https://imajin.ai */
