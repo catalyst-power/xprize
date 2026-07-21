@@ -39,13 +39,21 @@ console.log(`\n${BOLD}=== AgriFortress keypair generation ===${RESET}\n`);
 
 console.log(`${CYAN}Step 1 — Register the app${RESET}`);
 console.log('  Go to: https://imajin.ai/auth/developer/apps');
-console.log('  Fill in:');
-console.log(`    Name:          AgriFortress`);
-console.log(`    Callback URL:  http://localhost:3000/api/auth/callback  ${YELLOW}(dev)${RESET}`);
-console.log(`                   https://<your-cloud-run-domain>/api/auth/callback  ${YELLOW}(prod)${RESET}`);
-console.log(`    Homepage URL:  https://github.com/catalyst-power/xprize  ${YELLOW}(optional)${RESET}`);
-console.log(`    Scopes:        supply:read, supply:write`);
-console.log(`    ${BOLD}Public Key:${RESET}    ${GREEN}${publicKeyHex}${RESET}`);
+console.log('');
+console.log(`  ${YELLOW}Important:${RESET} the Callback URL is baked into the registration.`);
+console.log('  Register ONCE per deployment target (dev and prod need separate APP_IDs):');
+console.log('');
+console.log(`    ${BOLD}Dev registration${RESET}`);
+console.log('      Name:         AgriFortress (dev)');
+console.log('      Callback URL: http://localhost:3000/api/auth/callback');
+console.log('      Scopes:       supply:read, supply:write');
+console.log(`      Public Key:   ${GREEN}${publicKeyHex}${RESET}`);
+console.log('');
+console.log(`    ${BOLD}Prod registration${RESET}  ${YELLOW}(separate entry, same public key is fine)${RESET}`);
+console.log('      Name:         AgriFortress');
+console.log('      Callback URL: https://<your-cloud-run-url>/api/auth/callback');
+console.log('      Scopes:       supply:read, supply:write');
+console.log(`      Public Key:   ${GREEN}${publicKeyHex}${RESET}`);
 console.log('');
 
 console.log(`${CYAN}Step 2 — Add to .env.local${RESET}`);
