@@ -9,6 +9,7 @@
 
 import { redirect } from 'next/navigation';
 import { getSession } from '@/lib/session';
+import { DeliveryGesture } from './DeliveryGesture';
 
 export const dynamic = 'force-dynamic';
 
@@ -43,23 +44,8 @@ export default async function DashboardPage() {
           <p className="text-xs text-zinc-600 font-mono break-all pt-1">{user.did}</p>
         </section>
 
-        {/* Supply features placeholder */}
-        <section className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
-          <p className="text-sm font-medium text-zinc-300 mb-2">Supply — coming soon</p>
-          <p className="text-xs text-zinc-500 leading-relaxed">
-            The delivery gesture, signed records, and QuickBooks settlement will appear here.
-            Platform-side work is tracked in{' '}
-            <a
-              href="https://github.com/ima-jin/imajin-ai/issues/1133"
-              className="text-zinc-400 hover:text-zinc-200 underline underline-offset-2"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              ima-jin/imajin-ai#1133
-            </a>
-            .
-          </p>
-        </section>
+        {/* AI-native delivery gesture */}
+        <DeliveryGesture />
 
         {/* Auth debug */}
         <section className="rounded-xl border border-zinc-800/60 p-4">
