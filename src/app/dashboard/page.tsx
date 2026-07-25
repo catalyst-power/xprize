@@ -1,14 +1,15 @@
 /**
  * /dashboard — the post-login home screen.
  *
- * Session is verified server-side via getSession(). Middleware provides a
- * first line of defence (cookie presence check); this page does full JWT
- * verification and handles the edge case where the cookie is present but
- * the token is invalid/expired.
+ * Session is verified server-side via getSession().
+ * Shows a one-confirm delivery card pre-filled from the user's last delivery.
+ * All fields are editable; the happy path is a single tap.
  */
 
 import { redirect } from 'next/navigation';
 import { getSession } from '@/lib/session';
+import { getLastDelivery } from '@/lib/delivery/store';
+import { DeliveryCard } from './delivery-card';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,6 +19,17 @@ export default async function DashboardPage() {
   if (!user) {
     redirect('/');
   }
+
+  const last = await getLastDelivery(user.did);
+  const today = new Date().toISOString().slice(0, 10);
+
+  const prefill = last ?? {
+    customer: '',
+    commodity: 'eggs',
+    unit: 'dozen',
+    quantity: 6,
+    date: today,
+  };
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] p-6">
@@ -43,22 +55,15 @@ export default async function DashboardPage() {
           <p className="text-xs text-zinc-600 font-mono break-all pt-1">{user.did}</p>
         </section>
 
-        {/* Supply features placeholder */}
-        <section className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
-          <p className="text-sm font-medium text-zinc-300 mb-2">Supply — coming soon</p>
-          <p className="text-xs text-zinc-500 leading-relaxed">
-            The delivery gesture, signed records, and QuickBooks settlement will appear here.
-            Platform-side work is tracked in{' '}
-            <a
-              href="https://github.com/ima-jin/imajin-ai/issues/1133"
-              className="text-zinc-400 hover:text-zinc-200 underline underline-offset-2"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              ima-jin/imajin-ai#1133
-            </a>
-            .
-          </p>
+        {/* Delivery gesture */}
+        <section>
+          <DeliveryCard
+            initialCustomer={prefill.customer}
+            initialCommodity={prefill.commodity}
+            initialUnit={prefill.unit}
+            initialQuantity={prefill.quantity}
+            initialDate={prefill.date}
+          />
         </section>
 
         {/* Auth debug */}

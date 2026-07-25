@@ -60,7 +60,7 @@ function bytesToHex(bytes: Uint8Array): string {
 function decodeJwtPayload(token: string): Record<string, unknown> {
   const parts = token.split('.');
   if (parts.length < 2) throw new Error('Invalid JWT: expected 3 parts');
-  const padded = parts[1].replaceAll('-', '+').replaceAll('_', '/');
+  const padded = parts[1].replace(/-/g, '+').replace(/_/g, '/');
   return JSON.parse(Buffer.from(padded, 'base64').toString('utf-8')) as Record<string, unknown>;
 }
 
