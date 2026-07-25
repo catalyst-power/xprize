@@ -5,10 +5,13 @@
  * first line of defence (cookie presence check); this page does full JWT
  * verification and handles the edge case where the cookie is present but
  * the token is invalid/expired.
+ *
+ * The delivery card is the primary gesture: one confirm → signed receipt.
  */
 
 import { redirect } from 'next/navigation';
 import { getSession } from '@/lib/session';
+import { DeliveryCard } from '@/components/delivery-card';
 
 export const dynamic = 'force-dynamic';
 
@@ -40,33 +43,17 @@ export default async function DashboardPage() {
             {user.displayName}
           </p>
           <p className="text-sm text-zinc-400">@{user.handle}</p>
-          <p className="text-xs text-zinc-600 font-mono break-all pt-1">{user.did}</p>
         </section>
 
-        {/* Supply features placeholder */}
-        <section className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
-          <p className="text-sm font-medium text-zinc-300 mb-2">Supply — coming soon</p>
-          <p className="text-xs text-zinc-500 leading-relaxed">
-            The delivery gesture, signed records, and QuickBooks settlement will appear here.
-            Platform-side work is tracked in{' '}
-            <a
-              href="https://github.com/ima-jin/imajin-ai/issues/1133"
-              className="text-zinc-400 hover:text-zinc-200 underline underline-offset-2"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              ima-jin/imajin-ai#1133
-            </a>
-            .
-          </p>
-        </section>
+        {/* Delivery card — the ONE gesture */}
+        <DeliveryCard userDid={user.did} />
 
         {/* Auth debug */}
         <section className="rounded-xl border border-zinc-800/60 p-4">
           <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2">
-            Attestation
+            Session
           </p>
-          <p className="text-xs text-zinc-600 font-mono break-all">{user.attestationId}</p>
+          <p className="text-xs text-zinc-600 font-mono break-all">{user.did}</p>
         </section>
 
       </div>
