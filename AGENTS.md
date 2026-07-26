@@ -142,3 +142,43 @@ supplier, never **from** them. **Moat = legitimacy, not lock-in.**
     invite (AgriFortress DID invites them in, Mooi community pattern). The app consumes primitives into its own context.
 - **Contest:** XPRIZE "Build with Gemini" — deadline **Aug 17, 2026, 1:00 PM PT**. Entrant: Catalyst Agri-Innovations
   Society (CAIS). Imajin = tech vendor, retains platform IP.
+
+---
+
+## 5a. Staying in sync with the template
+
+This app tracks `ima-jin/imajin-app-template` as an **upstream remote** (not a GitHub fork). The shared contract
+(§1–§7 + config files) flows in from the template; **§6 is yours** and is never overwritten.
+
+```bash
+scripts/sync-from-template.sh --check   # see what upstream changes are pending
+scripts/sync-from-template.sh           # merge template/main onto a sync branch → open a PR
+```
+
+The first run joins the two histories once (`--allow-unrelated-histories`); every run after is a normal merge. On the
+rare conflict (almost always §6), **keep your §6** and take the template's §1–§7. See the script header for details.
+
+---
+
+## 7. Issue & contribution conventions
+
+This app follows the portable Imajin conventions from **[`ima-jin/conventions`](https://github.com/ima-jin/conventions)**
+— consumed, not forked.
+
+**Labels** are executable state, seeded once (idempotent):
+```bash
+scripts/init-taxonomy.sh <owner/repo>    # universal label set
+```
+
+**Lifecycle rules (the portable subset — standalone-repo, NOT the monorepo fork model):**
+- `Closes #N` / `Fixes #N` in a PR is the **only** thing that auto-closes an issue. A body mention or `Phase N — #N:`
+  closes nothing.
+- **Don't close-and-icebox real ideas** — a genuine idea not being worked now stays *open* (shelved), not closed.
+- **Native sub-issues / blocked-by** over `- [ ]` body checklists (GraphQL: `addSubIssue` / `addBlockedBy`; the latter's
+  arg is `blockingIssueId`).
+- Use labels for **type/topic**, not status. (Status/priority live on a board where one exists.)
+
+Full text: `ima-jin/conventions/ISSUE-CONVENTIONS.md`. This §7 is kept in sync via `scripts/sync-from-template.sh`.
+
+---
+
