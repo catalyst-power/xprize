@@ -7,16 +7,20 @@
  * the token is invalid/expired.
  *
  * Layout (top → bottom):
- *   Header → User card → Connections (QB self-auth) → Delivery gesture → Attestation
+ *   Header → User card → Connections (QB self-auth) → Delivery gesture | receipt → Attestation
  *
  * QuickBooks is a setup surface (Connections section); it must NOT appear
  * inside the delivery gesture — friction gate (AGENTS.md §4).
+ *
+ * After confirm, DeliveryGesture navigates to ?lot={correlationId}. This page
+ * then renders DeliveryReceipt (server component, view-only) in its place. (#7)
  */
 
 import { redirect } from 'next/navigation';
 import { getSession } from '@/lib/session';
 import { ConnectorPicker } from './ConnectorPicker';
 import { DeliveryGesture } from './DeliveryGesture';
+import { DeliveryReceipt } from './DeliveryReceipt';
 
 export const dynamic = 'force-dynamic';
 
@@ -32,6 +36,9 @@ export default async function DashboardPage(props: { searchParams: SearchParams 
   const kernelUrl = (process.env.KERNEL_URL ?? 'https://imajin.ai').replace(/\/$/, '');
   const rawConnected = searchParams['connected'];
   const connectedId = typeof rawConnected === 'string' ? rawConnected : undefined;
+
+  const rawLot = searchParams['lot'];
+  const lotId = typeof rawLot === 'string' ? rawLot : undefined;
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] p-6">
@@ -60,26 +67,10 @@ export default async function DashboardPage(props: { searchParams: SearchParams 
         {/* Connections — QB self-auth surface; separate from delivery gesture */}
         <ConnectorPicker kernelUrl={kernelUrl} connectedId={connectedId} />
 
-        {/* Delivery gesture — lands with feat/5-gemini-inference (#5) */}
-        <section className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
-          <p className="text-sm font-medium text-zinc-300 mb-2">Record a delivery</p>
-          <p className="text-xs text-zinc-500 leading-relaxed">
-            Voice note or photo → AI infers intent → you confirm and sign.
-            Tracked in{' '}
-            <a
-              href="https://github.com/catalyst-power/xprize/issues/5"
-              className="text-zinc-400 hover:text-zinc-200 underline underline-offset-2"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              #5
-            </a>
-            .
-          </p>
-        </section>
-        
-        {/* AI-native delivery gesture */}
-        <DeliveryGesture />
+        {/* Delivery gesture → receipt: gesture signs supply.received; receipt renders from it (#7) */}
+        {lotId !== undefined
+          ? <DeliveryReceipt correlationId={lotId} />
+          : <DeliveryGesture />}
 
         {/* Auth debug */}
         <section className="rounded-xl border border-zinc-800/60 p-4">

@@ -41,8 +41,52 @@ export interface SupplyStageResponse {
 }
 
 // ---------------------------------------------------------------------------
+// LotChain — read contract for GET /supply/api/lot/{correlationId}
+// ---------------------------------------------------------------------------
+
+export interface LotChainStage {
+  stage: string;
+  actorDid: string;
+  attestationCid: string | null;
+  priorCid: string | null;
+  payload: unknown;
+  createdAt: string;
+}
+
+export interface LotChain {
+  lot: {
+    correlationId: string;
+    originatingDid: string;
+    commodity: string | null;
+    status: string;
+    createdAt: string;
+  };
+  stages: LotChainStage[];
+}
+
+// ---------------------------------------------------------------------------
 // Client functions
 // ---------------------------------------------------------------------------
+
+/**
+ * Read the lot chain for a given correlationId.
+ * GET /supply/api/lot/{correlationId} — app-auth-gated (supply:read).
+ * Server-side only (same transport as declareSupplyLot / confirmDelivery).
+ * `correlationId` is the `externalId` returned by `InferenceConfirmResponse`.
+ */
+export async function getLotChain(correlationId: string): Promise<LotChain> {
+  const res = await fetchKernel(
+    `/supply/api/lot/${encodeURIComponent(correlationId)}`,
+    { method: 'GET' },
+  );
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
+    throw new Error(`supply.lot.read failed: ${res.status} ${data.error ?? res.statusText}`);
+  }
+
+  return res.json() as Promise<LotChain>;
+}
 
 /**
  * Fire `supply.declared` — mints a new lot.
