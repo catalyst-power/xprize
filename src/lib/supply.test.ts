@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { declareSupplyLot, confirmDelivery, getLotChain } from './supply';
-import type { LotChain } from './supply';
+import { declareSupplyLot, confirmDelivery, getLotChain, recentLots } from './supply';
+import type { LotChain, RecentLot } from './supply';
 
 vi.mock('./kernel/client', () => ({ fetchKernel: vi.fn() }));
 
@@ -64,6 +64,86 @@ const LOT_CHAIN_RESPONSE: LotChain = {
     },
   ],
 };
+
+const RECENT_LOTS_RESPONSE: RecentLot[] = [
+  {
+    correlationId: 'lot_abc123',
+    originatingDid: 'did:imajin:scott',
+    commodity: 'eggs',
+    status: 'received',
+    createdAt: '2026-01-01T00:00:00Z',
+  },
+];
+
+// ---------------------------------------------------------------------------
+// recentLots
+// ---------------------------------------------------------------------------
+
+describe('recentLots', () => {
+  it('GETs /supply/api/lots with the supplier DID and limit encoded in the query string', async () => {
+    mockFetch.mockReturnValue(okResponse(RECENT_LOTS_RESPONSE));
+
+    await recentLots('did:imajin:scott', 1);
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [path, opts] = mockFetch.mock.calls[0];
+    expect(opts?.method).toBe('GET');
+    expect(path).toContain('/supply/api/lots');
+    expect(path).toContain('supplier=did%3Aimajin%3Ascott');
+    expect(path).toContain('limit=1');
+  });
+
+  it('uses limit=1 by default', async () => {
+    mockFetch.mockReturnValue(okResponse(RECENT_LOTS_RESPONSE));
+
+    await recentLots('did:imajin:scott');
+
+    const [path] = mockFetch.mock.calls[0];
+    expect(path).toContain('limit=1');
+  });
+
+  it('returns the parsed RecentLot[] on success', async () => {
+    mockFetch.mockReturnValue(okResponse(RECENT_LOTS_RESPONSE));
+
+    const result = await recentLots('did:imajin:scott', 1);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].correlationId).toBe('lot_abc123');
+    expect(result[0].commodity).toBe('eggs');
+    expect(result[0].status).toBe('received');
+  });
+
+  it('returns an empty array when the supplier has no prior lots', async () => {
+    mockFetch.mockReturnValue(okResponse([]));
+
+    const result = await recentLots('did:imajin:scott', 1);
+
+    expect(result).toEqual([]);
+  });
+
+  it('throws with status + error message on a kernel error response', async () => {
+    mockFetch.mockReturnValue(errorResponse(403, { error: 'forbidden' }));
+
+    await expect(recentLots('did:imajin:scott', 1)).rejects.toThrow(
+      'supply.lots.read failed: 403',
+    );
+  });
+
+  it('throws with statusText when the error body is not parseable', async () => {
+    mockFetch.mockReturnValue(
+      Promise.resolve({
+        ok: false,
+        status: 500,
+        statusText: 'Internal Server Error',
+        json: () => Promise.reject(new Error('not json')),
+      } as Response),
+    );
+
+    await expect(recentLots('did:imajin:scott', 1)).rejects.toThrow(
+      'supply.lots.read failed: 500 Internal Server Error',
+    );
+  });
+});
 
 // ---------------------------------------------------------------------------
 // declareSupplyLot

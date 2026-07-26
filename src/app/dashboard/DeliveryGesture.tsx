@@ -19,6 +19,7 @@
  */
 
 import { useRef, useState } from 'react';
+import type { RecentLot } from '@/lib/supply';
 
 // ---------------------------------------------------------------------------
 // Types (mirroring kernel spec from issue #5)
@@ -73,6 +74,29 @@ interface DeliveryFields {
   notes: string;
 }
 
+// ---------------------------------------------------------------------------
+// Pre-fill helper — exported for testing
+// ---------------------------------------------------------------------------
+
+/**
+ * Merge Gemini inference metadata with the most recent lot (a prior, never authority).
+ * Inference wins when present; `priorLot.commodity` seeds the product field only when
+ * inference returned nothing. The human's confirmation is the signing event.
+ */
+export function resolveDeliveryFields(
+  meta: IntentMetadata,
+  priorLot: RecentLot | undefined,
+): DeliveryFields {
+  return {
+    product: meta.product ?? priorLot?.commodity ?? '',
+    qty: meta.qty != null ? String(meta.qty) : '',
+    unit: meta.unit ?? '',
+    recipient: meta.recipient ?? '',
+    lot: meta.lot ?? '',
+    notes: meta.notes ?? '',
+  };
+}
+
 type Phase = 'idle' | 'recording' | 'capturing' | 'editing' | 'submitting' | 'done' | 'error';
 
 interface GestureState {
@@ -100,7 +124,11 @@ const DELIVERY_FIELDS: ReadonlyArray<[keyof DeliveryFields, string, 'text' | 'nu
 // Component
 // ---------------------------------------------------------------------------
 
-export function DeliveryGesture() {
+interface DeliveryGestureProps {
+  readonly priorLot?: RecentLot;
+}
+
+export function DeliveryGesture({ priorLot }: DeliveryGestureProps) {
   const [state, setState] = useState<GestureState>({ phase: 'idle' });
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -135,14 +163,7 @@ export function DeliveryGesture() {
     setState({
       phase: 'editing',
       sessionId: capture.sessionId,
-      fields: {
-        product: meta.product ?? '',
-        qty: meta.qty != null ? String(meta.qty) : '',
-        unit: meta.unit ?? '',
-        recipient: meta.recipient ?? '',
-        lot: meta.lot ?? '',
-        notes: meta.notes ?? '',
-      },
+      fields: resolveDeliveryFields(meta, priorLot),
     });
   }
 

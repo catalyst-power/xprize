@@ -18,6 +18,7 @@
 
 import { redirect } from 'next/navigation';
 import { getSession } from '@/lib/session';
+import { recentLots, type RecentLot } from '@/lib/supply';
 import { ConnectorPicker } from './ConnectorPicker';
 import { DeliveryGesture } from './DeliveryGesture';
 import { DeliveryReceipt } from './DeliveryReceipt';
@@ -36,6 +37,10 @@ export default async function DashboardPage(props: { searchParams: SearchParams 
   const kernelUrl = (process.env.KERNEL_URL ?? 'https://imajin.ai').replace(/\/$/, '');
   const rawConnected = searchParams['connected'];
   const connectedId = typeof rawConnected === 'string' ? rawConnected : undefined;
+
+  // Pre-fill the delivery card from the supplier's most recent lot (supply:read, read-only).
+  // Failure is non-fatal — the card renders with blank defaults on any network/auth error.
+  const priorLot: RecentLot | undefined = (await recentLots(user.did, 1).catch(() => [])).at(0);
 
   const rawLot = searchParams['lot'];
   const lotId = typeof rawLot === 'string' ? rawLot : undefined;
@@ -70,7 +75,7 @@ export default async function DashboardPage(props: { searchParams: SearchParams 
         {/* Delivery gesture → receipt: gesture signs supply.received; receipt renders from it (#7) */}
         {lotId !== undefined
           ? <DeliveryReceipt correlationId={lotId} />
-          : <DeliveryGesture />}
+          : <DeliveryGesture priorLot={priorLot} />}
 
         {/* Auth debug */}
         <section className="rounded-xl border border-zinc-800/60 p-4">
