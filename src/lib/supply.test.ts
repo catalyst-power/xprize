@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { declareSupplyLot, confirmDelivery } from './supply';
+import { declareSupplyLot, confirmDelivery, getLotChain } from './supply';
+import type { LotChain } from './supply';
 
 vi.mock('./kernel/client', () => ({ fetchKernel: vi.fn() }));
 
@@ -35,6 +36,34 @@ function errorResponse(status: number, body: object) {
 
 const DECLARED_RESPONSE = { ok: true, correlationId: 'lot_abc123', stage: 'declared' };
 const RECEIVED_RESPONSE = { ok: true, correlationId: 'lot_abc123', stage: 'received' };
+
+const LOT_CHAIN_RESPONSE: LotChain = {
+  lot: {
+    correlationId: 'lot_abc123',
+    originatingDid: 'did:imajin:scott',
+    commodity: 'eggs',
+    status: 'received',
+    createdAt: '2026-01-01T00:00:00Z',
+  },
+  stages: [
+    {
+      stage: 'declared',
+      actorDid: 'did:imajin:scott',
+      attestationCid: 'bafkreideclared',
+      priorCid: null,
+      payload: { commodity: 'eggs', quantity: 6, unit: 'dozen' },
+      createdAt: '2026-01-01T00:00:00Z',
+    },
+    {
+      stage: 'received',
+      actorDid: 'did:imajin:scott',
+      attestationCid: 'bafkreireceived',
+      priorCid: 'bafkreideclared',
+      payload: { commodity: 'eggs', quantity: 6, unit: 'dozen', recipient: 'Grace Harbour Farms' },
+      createdAt: '2026-01-01T01:00:00Z',
+    },
+  ],
+};
 
 // ---------------------------------------------------------------------------
 // declareSupplyLot
@@ -133,5 +162,63 @@ describe('confirmDelivery', () => {
     await expect(
       confirmDelivery({ lotId: '', commodity: 'eggs', quantity: 6, unit: 'dozen' }),
     ).rejects.toThrow('supply.received failed: 400');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getLotChain
+// ---------------------------------------------------------------------------
+
+describe('getLotChain', () => {
+  it('GETs /supply/api/lot/{correlationId}', async () => {
+    mockFetch.mockReturnValue(okResponse(LOT_CHAIN_RESPONSE));
+
+    await getLotChain('lot_abc123');
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [path, opts] = mockFetch.mock.calls[0];
+    expect(path).toBe('/supply/api/lot/lot_abc123');
+    expect(opts?.method).toBe('GET');
+  });
+
+  it('URL-encodes the correlationId in the path', async () => {
+    mockFetch.mockReturnValue(okResponse(LOT_CHAIN_RESPONSE));
+
+    await getLotChain('lot/with/slashes');
+
+    const [path] = mockFetch.mock.calls[0];
+    expect(path).toBe('/supply/api/lot/lot%2Fwith%2Fslashes');
+  });
+
+  it('returns the parsed LotChain on success', async () => {
+    mockFetch.mockReturnValue(okResponse(LOT_CHAIN_RESPONSE));
+
+    const result = await getLotChain('lot_abc123');
+
+    expect(result.lot.correlationId).toBe('lot_abc123');
+    expect(result.lot.commodity).toBe('eggs');
+    expect(result.stages).toHaveLength(2);
+    expect(result.stages[1].stage).toBe('received');
+  });
+
+  it('throws with status + error message on a 404 response', async () => {
+    mockFetch.mockReturnValue(errorResponse(404, { error: 'lot not found' }));
+
+    await expect(getLotChain('lot_missing')).rejects.toThrow('supply.lot.read failed: 404');
+  });
+
+  it('throws with statusText when the error body is not parseable', async () => {
+    mockFetch.mockReturnValue(
+      Promise.resolve({
+        ok: false,
+        status: 500,
+        statusText: 'Internal Server Error',
+        json: () => Promise.reject(new Error('not json')),
+      } as Response),
+    );
+
+    await expect(getLotChain('lot_abc123')).rejects.toThrow(
+      'supply.lot.read failed: 500 Internal Server Error',
+    );
   });
 });

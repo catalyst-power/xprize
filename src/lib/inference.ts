@@ -53,6 +53,11 @@ export interface InferenceConfirmResponse {
   attestationId: string;
   intentType: string;
   primitiveType: string;
+  /**
+   * The `supply.received` lot correlationId — the same value `getLotChain()`
+   * expects. Set by the agrifortress vocabulary resolver when it signs the
+   * `supply.received` attestation. Use this to key the delivery receipt.
+   */
   externalId: string;
   resolvedAt: string;
 }

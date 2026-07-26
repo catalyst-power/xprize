@@ -43,6 +43,25 @@ interface ConfirmResponse {
   sessionId: string;
   status: string;
   attestationId: string;
+  /**
+   * The `supply.received` lot correlationId — mirrors `InferenceConfirmResponse.externalId`.
+   * When present, navigate to `/dashboard?lot={externalId}` to render the signed receipt.
+   * When absent (kernel hasn't resolved a supply lot), fall back to the inline attestationId panel.
+   */
+  externalId?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Pure helper — exported for testing
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the dashboard receipt URL when the confirm response carries a lot
+ * correlationId (`externalId`), or `null` to fall back to the inline panel.
+ */
+export function getReceiptUrl(externalId: string | undefined): string | null {
+  if (externalId === undefined || externalId === '') return null;
+  return `/dashboard?lot=${encodeURIComponent(externalId)}`;
 }
 
 interface DeliveryFields {
@@ -200,6 +219,13 @@ export function DeliveryGesture() {
       return;
     }
 
+    const receiptUrl = getReceiptUrl(confirm.externalId);
+    if (receiptUrl !== null) {
+      globalThis.location.assign(receiptUrl);
+      return;
+    }
+    // Fallback: no correlationId returned — keep the signed attestationId panel.
+    // Never fabricate a receipt when the lot id is absent (claim boundary, AGENTS.md §4).
     setState({ phase: 'done', attestationId: confirm.attestationId });
   }
 
