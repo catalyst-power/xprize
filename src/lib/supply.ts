@@ -65,6 +65,18 @@ export interface LotChain {
 }
 
 // ---------------------------------------------------------------------------
+// RecentLot — read contract for GET /supply/api/lots?supplier={did}&limit={n}
+// ---------------------------------------------------------------------------
+
+export interface RecentLot {
+  correlationId: string;
+  originatingDid: string;
+  commodity: string | null;
+  status: string;
+  createdAt: string;
+}
+
+// ---------------------------------------------------------------------------
 // Client functions
 // ---------------------------------------------------------------------------
 
@@ -86,6 +98,27 @@ export async function getLotChain(correlationId: string): Promise<LotChain> {
   }
 
   return res.json() as Promise<LotChain>;
+}
+
+/**
+ * Read the most recent lots for a supplier.
+ * GET /supply/api/lots?supplier={did}&limit={n} — app-auth-gated (supply:read).
+ * Returns an empty array when the supplier has no prior lots.
+ * Server-side only (same transport as declareSupplyLot / confirmDelivery).
+ */
+export async function recentLots(
+  supplierDid: string,
+  limit = 1,
+): Promise<RecentLot[]> {
+  const qs = new URLSearchParams({ supplier: supplierDid, limit: String(limit) });
+  const res = await fetchKernel(`/supply/api/lots?${qs.toString()}`, { method: 'GET' });
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
+    throw new Error(`supply.lots.read failed: ${res.status} ${data.error ?? res.statusText}`);
+  }
+
+  return res.json() as Promise<RecentLot[]>;
 }
 
 /**

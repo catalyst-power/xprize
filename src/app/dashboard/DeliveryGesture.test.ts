@@ -1,14 +1,66 @@
 import { describe, it, expect } from 'vitest';
-import { getReceiptUrl } from './DeliveryGesture';
+import { getReceiptUrl, resolveDeliveryFields } from './DeliveryGesture';
+import type { RecentLot } from '@/lib/supply';
 
 // ---------------------------------------------------------------------------
-// getReceiptUrl
+// resolveDeliveryFields
 //
-// Pure helper that maps a confirm response's externalId (the supply.received
-// correlationId) to the dashboard receipt URL, or null when no lot id is
-// present. Determines whether the gesture navigates to the receipt or falls
-// back to the inline attestationId panel.
+// Pure helper that merges Gemini inference metadata with the supplier's most
+// recent lot (a fallback prior). Inference wins when present; priorLot.commodity
+// seeds the product field only when inference returned nothing.
 // ---------------------------------------------------------------------------
+
+const RECENT_LOT: RecentLot = {
+  correlationId: 'lot_abc123',
+  originatingDid: 'did:imajin:scott',
+  commodity: 'eggs',
+  status: 'received',
+  createdAt: '2026-01-01T00:00:00Z',
+};
+
+describe('resolveDeliveryFields', () => {
+  it('uses inference product when present (inference wins over prior)', () => {
+    const fields = resolveDeliveryFields({ product: 'apples' }, RECENT_LOT);
+    expect(fields.product).toBe('apples');
+  });
+
+  it('falls back to priorLot.commodity when inference returned no product', () => {
+    const fields = resolveDeliveryFields({}, RECENT_LOT);
+    expect(fields.product).toBe('eggs');
+  });
+
+  it('returns empty string for product when priorLot.commodity is null', () => {
+    const lotNullCommodity: RecentLot = { ...RECENT_LOT, commodity: null };
+    const fields = resolveDeliveryFields({}, lotNullCommodity);
+    expect(fields.product).toBe('');
+  });
+
+  it('returns empty string for product when no inference and no priorLot', () => {
+    const fields = resolveDeliveryFields({}, undefined);
+    expect(fields.product).toBe('');
+  });
+
+  it('converts numeric qty from inference to a string', () => {
+    const fields = resolveDeliveryFields({ qty: 6 }, undefined);
+    expect(fields.qty).toBe('6');
+  });
+
+  it('leaves qty blank when inference returned no qty', () => {
+    const fields = resolveDeliveryFields({}, RECENT_LOT);
+    expect(fields.qty).toBe('');
+  });
+
+  it('maps unit, recipient, lot, and notes from inference metadata', () => {
+    const fields = resolveDeliveryFields(
+      { unit: 'dozen', recipient: 'Grace Harbour', lot: 'L1', notes: 'fresh' },
+      undefined,
+    );
+    expect(fields.unit).toBe('dozen');
+    expect(fields.recipient).toBe('Grace Harbour');
+    expect(fields.lot).toBe('L1');
+    expect(fields.notes).toBe('fresh');
+  });
+});
 
 describe('getReceiptUrl', () => {
   it('returns the dashboard receipt URL when externalId is present', () => {
