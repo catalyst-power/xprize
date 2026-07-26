@@ -53,8 +53,14 @@ export async function fetchKernel(
   const token = await provider.getToken();
   const url = `${kernelUrl}${path}`;
 
+  // Skip Content-Type for multipart (FormData) so fetch auto-sets the boundary.
+  const isFormData = typeof FormData !== 'undefined' && options?.body instanceof FormData;
+  const baseHeaders: Record<string, string> = isFormData
+    ? {}
+    : { 'Content-Type': 'application/json' };
+
   const headers = {
-    'Content-Type': 'application/json',
+    ...baseHeaders,
     ...options?.headers,
     Authorization: `Bearer ${token}`,
   };

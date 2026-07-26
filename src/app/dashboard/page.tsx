@@ -16,6 +16,7 @@
 import { redirect } from 'next/navigation';
 import { getSession } from '@/lib/session';
 import { ConnectorPicker } from './ConnectorPicker';
+import { DeliveryGesture } from './DeliveryGesture';
 
 export const dynamic = 'force-dynamic';
 
@@ -76,6 +77,9 @@ export default async function DashboardPage(props: { searchParams: SearchParams 
             .
           </p>
         </section>
+        
+        {/* AI-native delivery gesture */}
+        <DeliveryGesture />
 
         {/* Auth debug */}
         <section className="rounded-xl border border-zinc-800/60 p-4">
