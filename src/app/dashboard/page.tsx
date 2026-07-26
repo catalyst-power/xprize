@@ -5,19 +5,33 @@
  * first line of defence (cookie presence check); this page does full JWT
  * verification and handles the edge case where the cookie is present but
  * the token is invalid/expired.
+ *
+ * Layout (top → bottom):
+ *   Header → User card → Delivery gesture / receipt → Attestation
+ *
+ * After a delivery is confirmed, /api/supply/deliver returns correlationId.
+ * The gesture navigates to ?lot={correlationId} and this page renders the
+ * signed DeliveryReceipt in place of the gesture form. (#7)
  */
 
 import { redirect } from 'next/navigation';
 import { getSession } from '@/lib/session';
+import { DeliveryGesture } from './DeliveryGesture';
+import { DeliveryReceipt } from './DeliveryReceipt';
 
 export const dynamic = 'force-dynamic';
 
-export default async function DashboardPage() {
-  const user = await getSession();
+type SearchParams = Promise<Record<string, string | string[] | undefined>>;
+
+export default async function DashboardPage(props: { searchParams: SearchParams }) {
+  const [user, searchParams] = await Promise.all([getSession(), props.searchParams]);
 
   if (!user) {
     redirect('/');
   }
+
+  const rawLot = searchParams['lot'];
+  const lotId = typeof rawLot === 'string' ? rawLot : undefined;
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] p-6">
@@ -43,23 +57,10 @@ export default async function DashboardPage() {
           <p className="text-xs text-zinc-600 font-mono break-all pt-1">{user.did}</p>
         </section>
 
-        {/* Supply features placeholder */}
-        <section className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
-          <p className="text-sm font-medium text-zinc-300 mb-2">Supply — coming soon</p>
-          <p className="text-xs text-zinc-500 leading-relaxed">
-            The delivery gesture, signed records, and QuickBooks settlement will appear here.
-            Platform-side work is tracked in{' '}
-            <a
-              href="https://github.com/ima-jin/imajin-ai/issues/1133"
-              className="text-zinc-400 hover:text-zinc-200 underline underline-offset-2"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              ima-jin/imajin-ai#1133
-            </a>
-            .
-          </p>
-        </section>
+        {/* Delivery gesture / receipt — gesture signs supply.received; receipt renders from it (#7) */}
+        {lotId !== undefined
+          ? <DeliveryReceipt correlationId={lotId} />
+          : <DeliveryGesture />}
 
         {/* Auth debug */}
         <section className="rounded-xl border border-zinc-800/60 p-4">
