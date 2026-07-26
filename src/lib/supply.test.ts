@@ -65,15 +65,19 @@ const LOT_CHAIN_RESPONSE: LotChain = {
   ],
 };
 
-const RECENT_LOTS_RESPONSE: RecentLot[] = [
-  {
-    correlationId: 'lot_abc123',
-    originatingDid: 'did:imajin:scott',
-    commodity: 'eggs',
-    status: 'received',
-    createdAt: '2026-01-01T00:00:00Z',
-  },
-];
+// Kernel wraps the array: { lots: RecentLot[] }
+// ima-jin/imajin-ai@main apps/kernel/src/lib/supply.ts handleLotsBySupplierGet
+const RECENT_LOTS_RESPONSE = {
+  lots: [
+    {
+      correlationId: 'lot_abc123',
+      originatingDid: 'did:imajin:scott',
+      commodity: 'eggs',
+      status: 'received',
+      createdAt: '2026-01-01T00:00:00Z',
+    },
+  ] satisfies RecentLot[],
+};
 
 // ---------------------------------------------------------------------------
 // recentLots
@@ -114,7 +118,7 @@ describe('recentLots', () => {
   });
 
   it('returns an empty array when the supplier has no prior lots', async () => {
-    mockFetch.mockReturnValue(okResponse([]));
+    mockFetch.mockReturnValue(okResponse({ lots: [] }));
 
     const result = await recentLots('did:imajin:scott', 1);
 
