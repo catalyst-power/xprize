@@ -118,7 +118,10 @@ export async function recentLots(
     throw new Error(`supply.lots.read failed: ${res.status} ${data.error ?? res.statusText}`);
   }
 
-  return res.json() as Promise<RecentLot[]>;
+  // Kernel returns { lots: RecentLot[] } — ima-jin/imajin-ai@main
+  // apps/kernel/src/lib/supply.ts handleLotsBySupplierGet
+  const body = await res.json() as { lots: RecentLot[] };
+  return body.lots;
 }
 
 /**
