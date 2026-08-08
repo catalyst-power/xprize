@@ -108,19 +108,62 @@ Scope: supply:read
 Response: { lot: {...}, stages: [...] }
 ```
 
-## QuickBooks connector
+## Connector status (app-facing connector surface, #1540)
 
-The supplier connects their own QuickBooks account (self-service, not brokered by the app).
+Apps witness connector status; they never handle credentials or tokens directly. This is the
+app-facing seam that lets AgriFortress check whether a connector is connected without ever
+touching a connection or token.
+
+### GET `/connections/api/connectors/status` — live connector status
 
 ```
-POST   /quickbooks/api/connect       — initiate OAuth flow
-GET    /quickbooks/api/callback       — OAuth callback
-POST   /quickbooks/api/configure      — configure connected account
+Headers: X-App-DID, X-App-Authorization
+Scope: connectors:read-status
+Response 200: [{ id: string, connected: boolean, scopes: string[] }, ...]
+```
+
+- Registry-generic — returns an entry for every connector in the kernel's registry (QuickBooks,
+  Gemini, future Xero/Stripe/bank), not just the ones the app asks about.
+- Resolved for whichever identity's consent attestation minted the app-auth token (the acting
+  `userDid`). To check status for AgriFortress's own org-level connections (e.g. Gemini's
+  org-subsidized key) rather than a specific supplier's, mint the token with the org's own
+  attestation (`APP_ORG_ATTESTATION_ID`).
+- **Never** returns credentials, config, or tokens — only the boolean + granted scopes.
+- **Live per render, never cached app-side.** A stale "connected" would be the app fabricating a
+  fact it doesn't own (AGENTS.md §4).
+
+See `src/lib/kernel/connectors.ts` and `src/app/dashboard/ConnectedServicesPanel.tsx`.
+
+## QuickBooks connector
+
+**Post ima-jin/imajin-ai#1705:** app-owned OAuth client credentials are split from per-user token
+storage. AgriFortress seals its own Intuit app registration (clientId, clientSecret, redirectUri)
+in its **own app DID's vault** — suppliers never enter their own connector credentials. Each
+supplier's resulting OAuth tokens are sealed in **their own** DID's vault. The connect flow stays
+in-app: AgriFortress initiates OAuth via the kernel using app-auth, `onBehalfOf` the acting user.
+
+```
+POST   /quickbooks/api/connect       — initiate OAuth flow (app-auth + onBehalfOf + returnTo)
+GET    /quickbooks/api/callback       — OAuth callback (kernel-handled end to end)
 POST   /quickbooks/api/reconcile      — settle paid invoices (on-demand, not automatic)
 POST   /quickbooks/api/invoice        — create invoice on behalf of supplier
 GET    /quickbooks/api/scope-manifest — scope toggle state
 POST   /quickbooks/api/disconnect     — revoke connection
 ```
+
+**Connect flow (`createConnectHandler` + `resolveConfigDidFromAppAuth`, both shipped in #1705):**
+1. AgriFortress's own in-app route (`GET /api/connectors/quickbooks/connect`) calls the kernel's
+   `POST /quickbooks/api/connect` server-side with app-auth headers (`X-App-DID`,
+   `X-App-Authorization`) plus `onBehalfOf={userDid}` and `returnTo={dashboardUrl}`.
+2. The kernel resolves AgriFortress's Intuit client credentials from the app DID's vault via
+   `resolveConfigDidFromAppAuth` — the app never sends or sees a client secret.
+3. The kernel signs OAuth state with both the app DID and the user DID, then redirects to Intuit.
+4. Intuit redirects back to the kernel's callback; the kernel exchanges the code and seals the
+   resulting tokens at the **user's** DID (never the app's).
+5. The kernel redirects the browser to `returnTo` (the dashboard).
+
+AgriFortress's only responsibilities: show live status (via the connector status endpoint above),
+provide the "Connect QuickBooks" link to its own in-app route, and let the kernel do the rest.
 
 **Invoice creation flow:** gesture → human confirm → `supply.received` → QB invoice written + `.fair` priced → when invoice is paid (Balance==0), `.fair` split executes automatically. The human confirm IS the signing gate.
 
@@ -153,6 +196,7 @@ IMAJIN_AUTH_URL=https://jin.imajin.ai/auth   # kernel auth service base
 IMAJIN_APP_DID=did:imajin:<app-did>          # this app's registered DID
 SESSION_SECRET=<random-secret>                # for local jose JWT signing
 NEXT_PUBLIC_APP_URL=https://integrity.imajin.ai  # public URL of this app
+APP_ORG_ATTESTATION_ID=<org-consent-attestation-id>  # org-level connectors (Gemini), #1540
 ```
 
 ## What NOT to do
