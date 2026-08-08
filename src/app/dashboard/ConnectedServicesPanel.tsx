@@ -14,12 +14,20 @@
  * for each connector AgriFortress needs — never caches 'connected'
  * (AGENTS.md §4 claim boundary). Zero @imajin/* dependencies; the kernel is
  * reached only through app-auth HTTP calls (AGENTS.md §2).
+ *
+ * User-level status is fetched through this app's own GET /api/connectors/status
+ * route rather than calling `getUserConnectorStatus`/`fetchKernel` directly —
+ * that route is what resolves the acting supplier's own session attestation
+ * (xprize#36 bugfix: this app is multi-user, so there is no single "the"
+ * supplier attestation to bake into env vars). Org-level status has no such
+ * per-user concern (AGENTS.md §2's APP_ORG_ATTESTATION_ID is legitimately
+ * app-level), so it's still read directly via `getOrgConnectorStatus`.
  */
 
+import { cookies, headers } from 'next/headers';
 import {
   findConnectorStatus,
   getOrgConnectorStatus,
-  getUserConnectorStatus,
   hasRequiredScope,
   type ConnectorStatus,
 } from '@/lib/kernel/connectors';
@@ -72,10 +80,50 @@ export function connectorRowVariant(state: ConnectorRenderState): ConnectorRowVa
   return 'connect-button';
 }
 
+/**
+ * Resolve this app's own origin for a same-app server-to-server fetch.
+ * Prefers the configured public URL (matches the pattern in
+ * src/app/api/connectors/quickbooks/connect/route.ts); falls back to the
+ * incoming request's Host header for local/dev use where it's unset.
+ */
+async function resolveAppOrigin(): Promise<string> {
+  const configured = process.env.NEXT_PUBLIC_APP_URL;
+  if (configured) return configured.replace(/\/$/, '');
+
+  const requestHeaders = await headers();
+  const host = requestHeaders.get('host') ?? 'localhost:3403';
+  const proto = requestHeaders.get('x-forwarded-proto') ?? 'http';
+  return `${proto}://${host}`;
+}
+
+/**
+ * Live status for the acting supplier, via this app's own GET
+ * /api/connectors/status route — that route resolves the session
+ * attestation server-side; this panel never reads it or calls fetchKernel
+ * directly (xprize#36). The incoming request's session cookie is forwarded
+ * explicitly since a same-origin server-to-server fetch does not carry it
+ * automatically.
+ */
+async function fetchUserStatuses(): Promise<ConnectorStatus[] | null> {
+  try {
+    const [origin, cookieStore] = await Promise.all([resolveAppOrigin(), cookies()]);
+    const res = await fetch(`${origin}/api/connectors/status`, {
+      headers: { cookie: cookieStore.toString() },
+      cache: 'no-store',
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as ConnectorStatus[];
+  } catch {
+    return null;
+  }
+}
+
 /** Fetch live status for one acting level, resolving to `null` on failure (fail-closed). */
 async function fetchStatusesFor(level: ConnectorLevel): Promise<ConnectorStatus[] | null> {
+  if (level === 'user') return fetchUserStatuses();
+
   try {
-    return level === 'user' ? await getUserConnectorStatus() : await getOrgConnectorStatus();
+    return await getOrgConnectorStatus();
   } catch {
     return null;
   }

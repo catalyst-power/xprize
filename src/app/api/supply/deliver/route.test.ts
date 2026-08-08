@@ -121,6 +121,7 @@ describe('POST /api/supply/deliver — success', () => {
 
     expect(mockConfirm).toHaveBeenCalledWith(
       expect.objectContaining({ lotId: 'lot_xyz' }),
+      SESSION_USER.attestationId,
     );
   });
 
@@ -133,6 +134,7 @@ describe('POST /api/supply/deliver — success', () => {
 
     expect(mockConfirm).toHaveBeenCalledWith(
       expect.objectContaining({ priorCid: 'bafkreiabc' }),
+      SESSION_USER.attestationId,
     );
   });
 });

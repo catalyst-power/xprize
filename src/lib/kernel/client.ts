@@ -6,7 +6,11 @@
  *
  * Two acting identities are supported, matching whose consent attestation
  * mints the token:
- *   - fetchKernel      — the app's per-supplier attestation (APP_ATTESTATION_ID)
+ *   - fetchKernel      — a specific supplier's own consent attestation, passed
+ *                        in explicitly by the caller (pulled from that user's
+ *                        session — see src/lib/session.ts). This app is
+ *                        multi-user, so there is no single "the" supplier
+ *                        attestation baked into env vars.
  *   - fetchKernelAsOrg — the app's own org-level attestation (APP_ORG_ATTESTATION_ID),
  *                        used for org-subsidized connectors (e.g. Gemini) that an
  *                        org admin configures once on the app's own Imajin profile
@@ -18,28 +22,32 @@ import { TokenProvider } from './auth';
 const DEFAULT_KERNEL_URL = 'https://imajin.ai';
 
 // ---------------------------------------------------------------------------
-// Singleton TokenProviders (one per process)
+// TokenProviders — cached per attestation ID (one per acting supplier, plus
+// one for the org-level identity), since this app serves many suppliers
+// concurrently from the same process.
 // ---------------------------------------------------------------------------
 
-function getTokenProvider(): TokenProvider {
-  const g = globalThis as typeof globalThis & { __kernelTokenProvider?: TokenProvider };
+function getTokenProvider(attestationId: string): TokenProvider {
+  const appDid = process.env.APP_DID;
+  const privateKey = process.env.APP_PRIVATE_KEY;
+  const kernelUrl = process.env.KERNEL_URL ?? DEFAULT_KERNEL_URL;
 
-  if (!g.__kernelTokenProvider) {
-    const appDid = process.env.APP_DID;
-    const privateKey = process.env.APP_PRIVATE_KEY;
-    const attestationId = process.env.APP_ATTESTATION_ID;
-    const kernelUrl = process.env.KERNEL_URL ?? DEFAULT_KERNEL_URL;
-
-    if (!appDid || !privateKey || !attestationId) {
-      throw new Error(
-        'Kernel client requires APP_DID, APP_PRIVATE_KEY, and APP_ATTESTATION_ID env vars',
-      );
-    }
-
-    g.__kernelTokenProvider = new TokenProvider({ kernelUrl, appDid, privateKey, attestationId });
+  if (!appDid || !privateKey) {
+    throw new Error('Kernel client requires APP_DID and APP_PRIVATE_KEY env vars');
   }
 
-  return g.__kernelTokenProvider;
+  const g = globalThis as typeof globalThis & {
+    __kernelTokenProvidersByAttestation?: Map<string, TokenProvider>;
+  };
+  g.__kernelTokenProvidersByAttestation ??= new Map();
+
+  let provider = g.__kernelTokenProvidersByAttestation.get(attestationId);
+  if (!provider) {
+    provider = new TokenProvider({ kernelUrl, appDid, privateKey, attestationId });
+    g.__kernelTokenProvidersByAttestation.set(attestationId, provider);
+  }
+
+  return provider;
 }
 
 function getOrgTokenProvider(): TokenProvider {
@@ -106,16 +114,24 @@ async function fetchWithProvider(
 
 /**
  * Fetch a kernel API endpoint with automatic app-auth Bearer injection,
- * acting on behalf of the app's configured supplier (APP_ATTESTATION_ID).
+ * acting on behalf of a specific supplier.
+ *
+ * `attestationId` must be the acting user's own consent attestation ID
+ * (`SessionUser.attestationId` from `getSession()`) — never a value read
+ * from process.env. This app is multi-user, so there is no single "the"
+ * supplier attestation to bake into env vars; each request must carry the
+ * attestation of whichever supplier is actually logged in.
  *
  * @example
- *   const res = await fetchKernel('/api/supply/lots');
+ *   const user = await getSession();
+ *   const res = await fetchKernel('/api/supply/lots', undefined, user.attestationId);
  */
 export async function fetchKernel(
   path: string,
-  options?: RequestInit,
+  options: RequestInit | undefined,
+  attestationId: string,
 ): Promise<Response> {
-  return fetchWithProvider(getTokenProvider(), path, options);
+  return fetchWithProvider(getTokenProvider(attestationId), path, options);
 }
 
 /**

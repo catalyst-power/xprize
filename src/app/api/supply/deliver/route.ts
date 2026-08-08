@@ -85,7 +85,7 @@ export async function POST(request: NextRequest) {
   // Step 1: declare — mints the lot. correlationId IS the lotId.
   let declared: SupplyStageResponse;
   try {
-    declared = await declareSupplyLot({ commodity, quantity, unit });
+    declared = await declareSupplyLot({ commodity, quantity, unit }, user.attestationId);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: `supply.declared failed: ${message}` }, { status: 502 });
@@ -94,13 +94,16 @@ export async function POST(request: NextRequest) {
   // Step 2: received — signs the receipt threaded on the minted lot.
   // Honest partial-failure: if this throws, the lot exists but has no receipt.
   try {
-    const received = await confirmDelivery({
-      lotId: declared.correlationId,
-      commodity,
-      quantity,
-      unit,
-      ...(priorCid !== undefined ? { priorCid } : {}),
-    });
+    const received = await confirmDelivery(
+      {
+        lotId: declared.correlationId,
+        commodity,
+        quantity,
+        unit,
+        ...(priorCid !== undefined ? { priorCid } : {}),
+      },
+      user.attestationId,
+    );
 
     const result: DeliverSuccessResponse = { ok: true, declared, received };
     return NextResponse.json(result, { status: 201 });

@@ -40,6 +40,12 @@ import type { LotChain, SupplyStageResponse } from '@/lib/supply';
 const KERNEL_URL = process.env['KERNEL_URL'];
 const hasKernel = typeof KERNEL_URL === 'string' && KERNEL_URL.length > 0;
 
+// This harness is a fixed test-fixture identity hitting a live kernel —
+// unlike production code, it has no per-request session to pull an
+// attestation from, so reading it once from env here is fine. The app's
+// own per-user routes must never do this (xprize#36).
+const TEST_ATTESTATION_ID = process.env['APP_ATTESTATION_ID'] ?? '';
+
 // Use a per-run commodity suffix so parallel runs don't bleed state.
 const RUN_ID = randomUUID().slice(0, 8);
 const COMMODITY = `eggs-${RUN_ID}`;
@@ -59,32 +65,38 @@ describe.skipIf(!hasKernel)(
     // All steps in one beforeAll so each it() below asserts a single property
     // of the completed loop without repeating the HTTP calls.
     beforeAll(async () => {
-      // ── Step 1: declare (mint the lot) ──────────────────────────────────
-      const declRes = await fetchKernel('/supply/api/declared', {
-        method: 'POST',
-        body: JSON.stringify({ commodity: COMMODITY, quantity: QUANTITY, unit: UNIT }),
-      });
+      // ── Step 1: declare (mint the lot) ─────────────────────────────────
+      const declRes = await fetchKernel(
+        '/supply/api/declared',
+        { method: 'POST', body: JSON.stringify({ commodity: COMMODITY, quantity: QUANTITY, unit: UNIT }) },
+        TEST_ATTESTATION_ID,
+      );
       expect(declRes.status).toBe(201);
       const declared = await declRes.json() as SupplyStageResponse;
       correlationId = declared.correlationId;
 
-      // ── Step 2: received (sign the receipt) ─────────────────────────────
-      const recvRes = await fetchKernel('/supply/api/received', {
-        method: 'POST',
-        body: JSON.stringify({
-          lotId: correlationId,
-          commodity: COMMODITY,
-          quantity: QUANTITY,
-          unit: UNIT,
-        }),
-      });
+      // ── Step 2: received (sign the receipt) ───────────────────────────
+      const recvRes = await fetchKernel(
+        '/supply/api/received',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            lotId: correlationId,
+            commodity: COMMODITY,
+            quantity: QUANTITY,
+            unit: UNIT,
+          }),
+        },
+        TEST_ATTESTATION_ID,
+      );
       expect(recvRes.status).toBe(201);
       await recvRes.json(); // drain body
 
-      // ── Step 3: read the lot chain ───────────────────────────────────────
+      // ── Step 3: read the lot chain ─────────────────────────────────
       const chainRes = await fetchKernel(
         `/supply/api/lot/${encodeURIComponent(correlationId)}`,
         { method: 'GET' },
+        TEST_ATTESTATION_ID,
       );
       expect(chainRes.status).toBe(200);
       const chain = await chainRes.json() as LotChain;
@@ -104,6 +116,7 @@ describe.skipIf(!hasKernel)(
       const res = await fetchKernel(
         `/supply/api/lot/${encodeURIComponent(correlationId)}`,
         { method: 'GET' },
+        TEST_ATTESTATION_ID,
       );
       const chain = await res.json() as LotChain;
       const received = chain.stages.find((s) => s.stage === 'received');
@@ -115,6 +128,7 @@ describe.skipIf(!hasKernel)(
       const res = await fetchKernel(
         `/supply/api/lot/${encodeURIComponent(correlationId)}`,
         { method: 'GET' },
+        TEST_ATTESTATION_ID,
       );
       const chain = await res.json() as LotChain;
       expect(chain.stages).toHaveLength(2);
@@ -126,6 +140,7 @@ describe.skipIf(!hasKernel)(
       const res = await fetchKernel(
         `/supply/api/lot/${encodeURIComponent(correlationId)}`,
         { method: 'GET' },
+        TEST_ATTESTATION_ID,
       );
       const chain = await res.json() as LotChain;
       const received = chain.stages.find((s) => s.stage === 'received');
@@ -136,6 +151,7 @@ describe.skipIf(!hasKernel)(
       const res = await fetchKernel(
         `/supply/api/lot/${encodeURIComponent(correlationId)}`,
         { method: 'GET' },
+        TEST_ATTESTATION_ID,
       );
       const chain = await res.json() as LotChain;
       // originatingDid is set by the kernel from the app-auth token — never
@@ -147,6 +163,7 @@ describe.skipIf(!hasKernel)(
       const res = await fetchKernel(
         `/supply/api/lot/${encodeURIComponent(correlationId)}`,
         { method: 'GET' },
+        TEST_ATTESTATION_ID,
       );
       const chain = await res.json() as LotChain;
       const declared = chain.stages.find((s) => s.stage === 'declared');
@@ -194,18 +211,20 @@ describe.skipIf(!hasKernel)(
     });
 
     it('missing commodity in body → 400', async () => {
-      const res = await fetchKernel('/supply/api/declared', {
-        method: 'POST',
-        body: JSON.stringify({ quantity: QUANTITY, unit: UNIT }), // commodity absent
-      });
+      const res = await fetchKernel(
+        '/supply/api/declared',
+        { method: 'POST', body: JSON.stringify({ quantity: QUANTITY, unit: UNIT }) }, // commodity absent
+        TEST_ATTESTATION_ID,
+      );
       expect(res.status).toBe(400);
     });
 
     it('received with missing lotId → 400 (no phantom receipt)', async () => {
-      const res = await fetchKernel('/supply/api/received', {
-        method: 'POST',
-        body: JSON.stringify({ commodity: COMMODITY, quantity: QUANTITY, unit: UNIT }), // lotId absent
-      });
+      const res = await fetchKernel(
+        '/supply/api/received',
+        { method: 'POST', body: JSON.stringify({ commodity: COMMODITY, quantity: QUANTITY, unit: UNIT }) }, // lotId absent
+        TEST_ATTESTATION_ID,
+      );
       expect(res.status).toBe(400);
     });
 
@@ -214,24 +233,27 @@ describe.skipIf(!hasKernel)(
       const commodity = `partial-${runId}`;
 
       // declare succeeds
-      const declRes = await fetchKernel('/supply/api/declared', {
-        method: 'POST',
-        body: JSON.stringify({ commodity, quantity: 1, unit: 'unit' }),
-      });
+      const declRes = await fetchKernel(
+        '/supply/api/declared',
+        { method: 'POST', body: JSON.stringify({ commodity, quantity: 1, unit: 'unit' }) },
+        TEST_ATTESTATION_ID,
+      );
       expect(declRes.status).toBe(201);
       const { correlationId: partialLotId } = await declRes.json() as SupplyStageResponse;
 
       // received fails (lotId is empty string, not the real ID)
-      const recvRes = await fetchKernel('/supply/api/received', {
-        method: 'POST',
-        body: JSON.stringify({ lotId: '', commodity, quantity: 1, unit: 'unit' }),
-      });
+      const recvRes = await fetchKernel(
+        '/supply/api/received',
+        { method: 'POST', body: JSON.stringify({ lotId: '', commodity, quantity: 1, unit: 'unit' }) },
+        TEST_ATTESTATION_ID,
+      );
       expect(recvRes.status).toBe(400);
 
       // chain still shows declared only — no phantom receipt
       const chainRes = await fetchKernel(
         `/supply/api/lot/${encodeURIComponent(partialLotId)}`,
         { method: 'GET' },
+        TEST_ATTESTATION_ID,
       );
       const chain = await chainRes.json() as LotChain;
       expect(chain.stages.some((s) => s.stage === 'received')).toBe(false);

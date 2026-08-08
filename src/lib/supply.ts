@@ -85,11 +85,16 @@ export interface RecentLot {
  * GET /supply/api/lot/{correlationId} — app-auth-gated (supply:read).
  * Server-side only (same transport as declareSupplyLot / confirmDelivery).
  * `correlationId` is the `externalId` returned by `InferenceConfirmResponse`.
+ * `attestationId` must be the acting user's own session attestation.
  */
-export async function getLotChain(correlationId: string): Promise<LotChain> {
+export async function getLotChain(
+  correlationId: string,
+  attestationId: string,
+): Promise<LotChain> {
   const res = await fetchKernel(
     `/supply/api/lot/${encodeURIComponent(correlationId)}`,
     { method: 'GET' },
+    attestationId,
   );
 
   if (!res.ok) {
@@ -105,13 +110,15 @@ export async function getLotChain(correlationId: string): Promise<LotChain> {
  * GET /supply/api/lots?supplier={did}&limit={n} — app-auth-gated (supply:read).
  * Returns an empty array when the supplier has no prior lots.
  * Server-side only (same transport as declareSupplyLot / confirmDelivery).
+ * `attestationId` must be the acting user's own session attestation.
  */
 export async function recentLots(
   supplierDid: string,
+  attestationId: string,
   limit = 1,
 ): Promise<RecentLot[]> {
   const qs = new URLSearchParams({ supplier: supplierDid, limit: String(limit) });
-  const res = await fetchKernel(`/supply/api/lots?${qs.toString()}`, { method: 'GET' });
+  const res = await fetchKernel(`/supply/api/lots?${qs.toString()}`, { method: 'GET' }, attestationId);
 
   if (!res.ok) {
     const data = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
@@ -128,14 +135,17 @@ export async function recentLots(
  * Fire `supply.declared` — mints a new lot.
  * Returns `{ ok, correlationId, stage: 'declared' }`.
  * `correlationId` IS the `lotId`; pass it to `confirmDelivery`.
+ * `attestationId` must be the acting user's own session attestation.
  */
 export async function declareSupplyLot(
   body: SupplyDeclaredRequest,
+  attestationId: string,
 ): Promise<SupplyStageResponse> {
-  const res = await fetchKernel('/supply/api/declared', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
+  const res = await fetchKernel(
+    '/supply/api/declared',
+    { method: 'POST', body: JSON.stringify(body) },
+    attestationId,
+  );
 
   if (!res.ok) {
     const data = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
@@ -149,14 +159,17 @@ export async function declareSupplyLot(
  * Fire `supply.received` — signs the delivery receipt threaded on an existing lot.
  * `lotId` must be the `correlationId` returned by `declareSupplyLot`.
  * Returns `{ ok, correlationId, stage: 'received' }`.
+ * `attestationId` must be the acting user's own session attestation.
  */
 export async function confirmDelivery(
   body: SupplyReceivedRequest,
+  attestationId: string,
 ): Promise<SupplyStageResponse> {
-  const res = await fetchKernel('/supply/api/received', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
+  const res = await fetchKernel(
+    '/supply/api/received',
+    { method: 'POST', body: JSON.stringify(body) },
+    attestationId,
+  );
 
   if (!res.ok) {
     const data = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };

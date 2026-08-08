@@ -73,11 +73,13 @@ export interface InferenceConfirmResponse {
  * (Gemini adapter + supply intents). Returns `candidateIntents` ranked by
  * confidence; callers should present `candidateIntents[0]` for editing.
  *
- * @param file     Audio/photo blob from the browser (via the app server route).
- * @param filename Optional display filename forwarded to the kernel.
+ * @param file          Audio/photo blob from the browser (via the app server route).
+ * @param attestationId The acting user's own session attestation.
+ * @param filename      Optional display filename forwarded to the kernel.
  */
 export async function captureInference(
   file: File | Blob,
+  attestationId: string,
   filename?: string,
 ): Promise<InferenceCaptureResponse> {
   const effectiveFilename =
@@ -90,10 +92,11 @@ export async function captureInference(
     form.append('filename', filename);
   }
 
-  const res = await fetchKernel('/api/inference/capture', {
-    method: 'POST',
-    body: form,
-  });
+  const res = await fetchKernel(
+    '/api/inference/capture',
+    { method: 'POST', body: form },
+    attestationId,
+  );
 
   if (!res.ok) {
     const data = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
@@ -112,14 +115,17 @@ export async function captureInference(
  * attestation via the agrifortress vocabulary resolver, and returns the
  * signed `attestationId`. No retry is safe — the intent is signed exactly once.
  *
- * @param sessionId The `sessionId` returned by `captureInference`.
+ * @param sessionId     The `sessionId` returned by `captureInference`.
+ * @param attestationId The acting user's own session attestation.
  */
 export async function confirmInference(
   sessionId: string,
+  attestationId: string,
 ): Promise<InferenceConfirmResponse> {
   const res = await fetchKernel(
     `/api/inference/confirm/${encodeURIComponent(sessionId)}`,
     { method: 'POST' },
+    attestationId,
   );
 
   if (!res.ok) {

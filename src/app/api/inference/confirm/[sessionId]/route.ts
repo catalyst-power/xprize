@@ -35,7 +35,7 @@ export async function POST(
   const { sessionId } = await params;
 
   try {
-    const result = await confirmInference(sessionId);
+    const result = await confirmInference(sessionId, user.attestationId);
     return NextResponse.json(result, { status: 200 });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

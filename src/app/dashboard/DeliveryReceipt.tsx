@@ -77,12 +77,14 @@ function ReceiptError(props: Readonly<{ message: string }>) {
 // Component
 // ---------------------------------------------------------------------------
 
-export async function DeliveryReceipt(props: Readonly<{ correlationId: string }>) {
-  const { correlationId } = props;
+export async function DeliveryReceipt(
+  props: Readonly<{ correlationId: string; attestationId: string }>,
+) {
+  const { correlationId, attestationId } = props;
 
   let chain: LotChain;
   try {
-    chain = await getLotChain(correlationId);
+    chain = await getLotChain(correlationId, attestationId);
   } catch (err) {
     return (
       <ReceiptError

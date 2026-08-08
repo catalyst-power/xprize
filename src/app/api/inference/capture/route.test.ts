@@ -117,6 +117,7 @@ describe('POST /api/inference/capture — success', () => {
 
     expect(mockCapture).toHaveBeenCalledWith(
       expect.any(File),
+      SESSION_USER.attestationId,
       'my-photo.jpg',
     );
   });
@@ -129,6 +130,7 @@ describe('POST /api/inference/capture — success', () => {
 
     expect(mockCapture).toHaveBeenCalledWith(
       expect.any(File),
+      SESSION_USER.attestationId,
       undefined,
     );
   });

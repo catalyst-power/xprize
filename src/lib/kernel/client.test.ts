@@ -45,10 +45,10 @@ const ORIGINAL_ENV: Record<string, string | undefined> = {};
 
 function clearCachedTokenProviders(): void {
   const g = globalThis as typeof globalThis & {
-    __kernelTokenProvider?: unknown;
+    __kernelTokenProvidersByAttestation?: unknown;
     __kernelOrgTokenProvider?: unknown;
   };
-  delete g.__kernelTokenProvider;
+  delete g.__kernelTokenProvidersByAttestation;
   delete g.__kernelOrgTokenProvider;
 }
 
@@ -93,26 +93,43 @@ function stubDataFetch() {
 // ---------------------------------------------------------------------------
 
 describe('fetchKernel', () => {
-  it('mints via the per-supplier attestation and attaches a Bearer token', async () => {
+  it("mints via the caller-supplied attestationId and attaches a Bearer token — never process.env.APP_ATTESTATION_ID", async () => {
     const fetchMock = stubDataFetch();
     const { fetchKernel } = await import('./client');
 
-    await fetchKernel('/supply/api/lots');
+    await fetchKernel('/supply/api/lots', undefined, 'att-scott-456');
 
     expect(fetchMock).toHaveBeenCalledOnce();
     const [url, opts] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://test.imajin.ai/supply/api/lots');
     expect((opts.headers as Record<string, string>).Authorization).toBe(
-      'Bearer token-for-att-user-123',
+      'Bearer token-for-att-scott-456',
     );
   });
 
-  it('throws a descriptive error when required env vars are missing', async () => {
-    delete process.env.APP_ATTESTATION_ID;
+  it('caches a separate TokenProvider per distinct attestationId', async () => {
+    const fetchMock = stubDataFetch();
     const { fetchKernel } = await import('./client');
 
-    await expect(fetchKernel('/supply/api/lots')).rejects.toThrow(
-      'APP_DID, APP_PRIVATE_KEY, and APP_ATTESTATION_ID',
+    await fetchKernel('/supply/api/lots', undefined, 'att-scott');
+    await fetchKernel('/supply/api/lots', undefined, 'att-dave');
+
+    const [, scottOpts] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [, daveOpts] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect((scottOpts.headers as Record<string, string>).Authorization).toBe(
+      'Bearer token-for-att-scott',
+    );
+    expect((daveOpts.headers as Record<string, string>).Authorization).toBe(
+      'Bearer token-for-att-dave',
+    );
+  });
+
+  it('throws a descriptive error when APP_DID / APP_PRIVATE_KEY env vars are missing', async () => {
+    delete process.env.APP_DID;
+    const { fetchKernel } = await import('./client');
+
+    await expect(fetchKernel('/supply/api/lots', undefined, 'att-scott-456')).rejects.toThrow(
+      'APP_DID and APP_PRIVATE_KEY',
     );
   });
 });
@@ -150,6 +167,8 @@ describe('fetchKernelAsOrg', () => {
     stubDataFetch();
     const { fetchKernel } = await import('./client');
 
-    await expect(fetchKernel('/supply/api/lots')).resolves.toBeDefined();
+    await expect(
+      fetchKernel('/supply/api/lots', undefined, 'att-scott-456'),
+    ).resolves.toBeDefined();
   });
 });
