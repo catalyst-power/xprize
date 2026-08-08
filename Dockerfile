@@ -4,6 +4,7 @@
 # =============================================================================
 
 FROM node:22-alpine AS base
+RUN corepack enable
 
 # ---------------------------------------------------------------------------
 # 1. Install dependencies
@@ -11,8 +12,8 @@ FROM node:22-alpine AS base
 FROM base AS deps
 WORKDIR /app
 
-COPY package.json package-lock.json ./
-RUN npm ci
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
 
 # ---------------------------------------------------------------------------
 # 2. Build
@@ -24,7 +25,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 # next build emits .next/standalone when output: 'standalone' is set
-RUN npm run build
+RUN pnpm run build
 
 # ---------------------------------------------------------------------------
 # 3. Runtime — minimal image with only the standalone output
