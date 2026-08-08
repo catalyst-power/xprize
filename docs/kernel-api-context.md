@@ -108,6 +108,34 @@ Scope: supply:read
 Response: { lot: {...}, stages: [...] }
 ```
 
+## Connector status (app-facing connector surface, #1540)
+
+Apps never manage connector lifecycle (select / connect / OAuth / token custody) — that is
+profile-tier. This is the app-facing seam that lets AgriFortress witness status without ever
+touching a connection or token.
+
+### GET `/connections/api/connectors/status` — live connector status
+
+```
+Headers: X-App-DID, X-App-Authorization
+Scope: connectors:read-status
+Response 200: [{ id: string, connected: boolean, scopes: string[] }, ...]
+```
+
+- Registry-generic — returns an entry for every connector in the kernel's registry (QuickBooks,
+  Gemini, future Xero/Stripe/bank), not just the ones the app asks about.
+- Resolved for whichever identity's consent attestation minted the app-auth token (the acting
+  `userDid`). To check status for AgriFortress's own org-level connections (e.g. Gemini's
+  org-subsidized key) rather than a specific supplier's, mint the token with the org's own
+  attestation.
+- **Never** returns credentials, config, or tokens — only the boolean + granted scopes.
+- **Live per render, never cached app-side.** A stale "connected" would be the app fabricating a
+  profile fact it doesn't own (AGENTS.md §4).
+- Missing connector → deep-link the user to `{kernelUrl}/auth/connectors?connect=<id>&returnTo=<url>`
+  (profile owns connect; the app only links out).
+
+See `src/lib/kernel/connectors.ts` and `src/app/dashboard/ConnectedServicesPanel.tsx`.
+
 ## QuickBooks connector
 
 The supplier connects their own QuickBooks account (self-service, not brokered by the app).
@@ -153,6 +181,7 @@ IMAJIN_AUTH_URL=https://jin.imajin.ai/auth   # kernel auth service base
 IMAJIN_APP_DID=did:imajin:<app-did>          # this app's registered DID
 SESSION_SECRET=<random-secret>                # for local jose JWT signing
 NEXT_PUBLIC_APP_URL=https://integrity.imajin.ai  # public URL of this app
+APP_ORG_ATTESTATION_ID=<org-consent-attestation-id>  # org-level connectors (Gemini), #1540
 ```
 
 ## What NOT to do

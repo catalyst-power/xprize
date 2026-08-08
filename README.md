@@ -128,6 +128,7 @@ Copy `.env.example` to `.env.local` and populate the following:
 | `APP_DID` | Yes (kernel calls) | The app's registered DID (`did:imajin:…`). Obtained after app registration. |
 | `APP_PRIVATE_KEY` | Yes (kernel calls) | Ed25519 seed as hex (32 bytes = 64 hex chars). Generated at registration. **Never commit.** |
 | `APP_ATTESTATION_ID` | Yes (kernel calls) | The user's consent attestation ID, linking this app to a specific user's `supply:read/write` grant. |
+| `APP_ORG_ATTESTATION_ID` | No | AgriFortress's own org-level consent attestation ID. Used only to check org-subsidized connector status (e.g. Gemini) on the Connected Services panel. Without it, that panel shows "status unavailable" for org-level connectors. |
 
 `APP_DID`, `APP_PRIVATE_KEY`, and `APP_ATTESTATION_ID` are obtained through the app registration and consent flow (issue [#3](https://github.com/catalyst-power/xprize/issues/3) in the epic). The app runs and serves the health route without them — only kernel-authenticated routes require them.
 

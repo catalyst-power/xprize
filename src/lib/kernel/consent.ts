@@ -14,12 +14,16 @@ const DEFAULT_KERNEL_URL = 'https://imajin.ai';
 /**
  * Scopes AgriFortress requests from the Imajin kernel.
  *
- * supply:read/write     — delivery lots, stages, signed receipts
- * profile:read          — show Scott's name/handle in the app
- * media:read/write      — delivery photos
- * quickbooks:read       — read existing QuickBooks invoices
- * quickbooks:write      — write QuickBooks invoice on Scott's behalf when
- *                         David (receiver) confirms delivery; receipt = invoice
+ * supply:read/write        — delivery lots, stages, signed receipts
+ * profile:read             — show Scott's name/handle in the app
+ * media:read/write         — delivery photos
+ * quickbooks:read          — read existing QuickBooks invoices
+ * quickbooks:write         — write QuickBooks invoice on Scott's behalf when
+ *                            David (receiver) confirms delivery; receipt = invoice
+ * connectors:read-status   — witness whether a connector (QuickBooks, Gemini) is
+ *                            connected + its granted scopes, never the credential
+ *                            itself (ima-jin/imajin-ai#1540; powers the dashboard's
+ *                            Connected Services panel)
  */
 export const AGRIFORTRESS_SCOPES = [
   'supply:read',
@@ -29,6 +33,7 @@ export const AGRIFORTRESS_SCOPES = [
   'media:write',
   'quickbooks:read',
   'quickbooks:write',
+  'connectors:read-status',
 ] as const;
 
 export interface ConsentUrlOptions {
