@@ -7,10 +7,12 @@
  * the token is invalid/expired.
  *
  * Layout (top → bottom):
- *   Header → User card → Connections (QB self-auth) → Delivery gesture | receipt → Attestation
+ *   Header → User card → Connected Services (status only) → Delivery gesture | receipt → Attestation
  *
- * QuickBooks is a setup surface (Connections section); it must NOT appear
- * inside the delivery gesture — friction gate (AGENTS.md §4).
+ * Connected Services is a live status panel — it never asks the user to
+ * configure connector credentials (the app owns those). It must NOT appear
+ * inside the delivery gesture — friction gate (AGENTS.md §4). See
+ * catalyst-power/xprize#36.
  *
  * After confirm, DeliveryGesture navigates to ?lot={correlationId}. This page
  * then renders DeliveryReceipt (server component, view-only) in its place. (#7)
@@ -19,7 +21,7 @@
 import { redirect } from 'next/navigation';
 import { getSession } from '@/lib/session';
 import { recentLots, type RecentLot } from '@/lib/supply';
-import { ConnectorPicker } from './ConnectorPicker';
+import { ConnectedServicesPanel } from './ConnectedServicesPanel';
 import { DeliveryGesture } from './DeliveryGesture';
 import { DeliveryReceipt } from './DeliveryReceipt';
 
@@ -34,9 +36,8 @@ export default async function DashboardPage(props: { searchParams: SearchParams 
     redirect('/');
   }
 
-  const kernelUrl = (process.env.KERNEL_URL ?? 'https://imajin.ai').replace(/\/$/, '');
-  const rawConnected = searchParams['connected'];
-  const connectedId = typeof rawConnected === 'string' ? rawConnected : undefined;
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? '').replace(/\/$/, '');
+  const returnTo = `${appUrl}/dashboard`;
 
   // Pre-fill the delivery card from the supplier's most recent lot (supply:read, read-only).
   // Failure is non-fatal — the card renders with blank defaults on any network/auth error.
@@ -69,8 +70,8 @@ export default async function DashboardPage(props: { searchParams: SearchParams 
           <p className="text-xs text-zinc-600 font-mono break-all pt-1">{user.did}</p>
         </section>
 
-        {/* Connections — QB self-auth surface; separate from delivery gesture */}
-        <ConnectorPicker kernelUrl={kernelUrl} connectedId={connectedId} />
+        {/* Connected Services — live status only; the app owns connector credentials (#36) */}
+        <ConnectedServicesPanel returnTo={returnTo} />
 
         {/* Delivery gesture → receipt: gesture signs supply.received; receipt renders from it (#7) */}
         {lotId !== undefined

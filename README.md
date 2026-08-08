@@ -128,6 +128,7 @@ Copy `.env.example` to `.env.local` and populate the following:
 | `APP_DID` | Yes (kernel calls) | The app's registered DID (`did:imajin:…`). Obtained after app registration. |
 | `APP_PRIVATE_KEY` | Yes (kernel calls) | Ed25519 seed as hex (32 bytes = 64 hex chars). Generated at registration. **Never commit.** |
 | `APP_ATTESTATION_ID` | Yes (kernel calls) | The user's consent attestation ID, linking this app to a specific user's `supply:read/write` grant. |
+| `APP_ORG_ATTESTATION_ID` | No | AgriFortress's own org-level consent attestation ID. Used only to check org-subsidized connector status (e.g. Gemini) on the Connected Services panel. Without it, that panel shows "status unavailable" for org-level connectors. |
 
 `APP_DID`, `APP_PRIVATE_KEY`, and `APP_ATTESTATION_ID` are obtained through the app registration and consent flow (issue [#3](https://github.com/catalyst-power/xprize/issues/3) in the epic). The app runs and serves the health route without them — only kernel-authenticated routes require them.
 
@@ -156,6 +157,10 @@ Smoke call — completes the full app-auth handshake against the Imajin kernel a
 ```
 
 **Auth flow (for reference):** the app signs a challenge with its Ed25519 private key → `POST /auth/api/apps/token` on the kernel → receives a short-lived bearer token (10 min, auto-refreshed at 80% TTL) → `userDid` is decoded from the JWT `sub` claim. See `src/lib/kernel/auth.ts`.
+
+#### `GET /api/connectors/quickbooks/connect`
+
+Target of the dashboard's "Connect QuickBooks" button (Connected Services panel, issue [#36](https://github.com/catalyst-power/xprize/issues/36)). Requires an active session; makes the app-auth'd `POST /quickbooks/api/connect` call to the kernel server-side and forwards the resulting OAuth redirect to Intuit. AgriFortress owns the Intuit app registration (sealed in its app DID's vault); it never receives a client secret or an OAuth token — the kernel seals the supplier's tokens at their own DID once they approve.
 
 ### Docker / Cloud Run
 
