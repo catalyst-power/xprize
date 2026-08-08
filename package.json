@@ -4,7 +4,7 @@
   "private": true,
   "packageManager": "pnpm@10.11.0",
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 3403",
     "build": "next build",
     "start": "next start",
     "test": "vitest run",
