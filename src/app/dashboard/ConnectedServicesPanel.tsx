@@ -20,8 +20,9 @@
  * that route is what resolves the acting supplier's own session attestation
  * (xprize#36 bugfix: this app is multi-user, so there is no single "the"
  * supplier attestation to bake into env vars). Org-level status has no such
- * per-user concern (AGENTS.md §2's APP_ORG_ATTESTATION_ID is legitimately
- * app-level), so it's still read directly via `getOrgConnectorStatus`.
+ * per-user concern — AgriFortress is checking its own connector config, not
+ * acting for a supplier — so it's read directly via `getOrgConnectorStatus`,
+ * which authenticates as the app itself (no consent attestation, xprize#36).
  */
 
 import { cookies, headers } from 'next/headers';

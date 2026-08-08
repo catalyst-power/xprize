@@ -71,13 +71,24 @@ function decodeJwtPayload(token: string): Record<string, unknown> {
 /**
  * Mint a short-lived app token by proving possession of the app's Ed25519 key.
  *
- * Challenge signed: `${appDid}:${attestationId}:${nonce}:${timestamp}`
+ * With an `attestationId` (a specific supplier's own consent attestation),
+ * the minted token's `sub` resolves to that supplier's userDid — the app is
+ * acting *for* them. Without one, the app authenticates as **itself**: no
+ * consent attestation is involved because there is no human being acted for
+ * — this is the app checking a fact about its own identity (e.g. its own
+ * org-level connector configuration), not a request made on a supplier's
+ * behalf.
+ *
+ * Challenge signed:
+ *   - with attestation:    `${appDid}:${attestationId}:${nonce}:${timestamp}`
+ *   - self (no attestation): `${appDid}:${nonce}:${timestamp}`
  * Endpoint: POST {kernelUrl}/auth/api/apps/token
  */
 export async function mintAppToken(opts: {
   kernelUrl?: string;
   appDid: string;
-  attestationId: string;
+  /** Omit for a self-authenticated (app-as-itself) token — no consent attestation. */
+  attestationId?: string;
   /** Ed25519 seed as hex (32 bytes = 64 hex chars) */
   privateKey: string;
   scope?: string;
@@ -85,7 +96,9 @@ export async function mintAppToken(opts: {
   const kernelUrl = (opts.kernelUrl ?? DEFAULT_KERNEL_URL).replace(/\/$/, '');
   const nonce = randomBytes(16).toString('hex'); // 32 hex chars — satisfies ≥ 16 requirement
   const timestamp = new Date().toISOString();
-  const challenge = `${opts.appDid}:${opts.attestationId}:${nonce}:${timestamp}`;
+  const challenge = opts.attestationId
+    ? `${opts.appDid}:${opts.attestationId}:${nonce}:${timestamp}`
+    : `${opts.appDid}:${nonce}:${timestamp}`;
 
   const msgBytes = new TextEncoder().encode(challenge);
   const privKeyBytes = hexToBytes(opts.privateKey);
@@ -97,7 +110,7 @@ export async function mintAppToken(opts: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       appDid: opts.appDid,
-      attestationId: opts.attestationId,
+      ...(opts.attestationId !== undefined ? { attestationId: opts.attestationId } : {}),
       nonce,
       timestamp,
       signature,
@@ -150,7 +163,8 @@ export class TokenProvider {
   private readonly kernelUrl: string;
   private readonly appDid: string;
   private readonly privateKey: string;
-  private readonly attestationId: string;
+  /** Omitted for a self-authenticated provider (app-as-itself, no consent attestation). */
+  private readonly attestationId?: string;
   private readonly scope?: string;
 
   private cachedToken: string | null = null;
@@ -161,7 +175,7 @@ export class TokenProvider {
     kernelUrl?: string;
     appDid: string;
     privateKey: string;
-    attestationId: string;
+    attestationId?: string;
     scope?: string;
   }) {
     this.kernelUrl = (opts.kernelUrl ?? DEFAULT_KERNEL_URL).replace(/\/$/, '');

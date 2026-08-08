@@ -13,7 +13,7 @@
  * app fabricating a profile fact it doesn't own.
  */
 
-import { fetchKernel, fetchKernelAsOrg } from './client';
+import { fetchKernel, fetchKernelAsSelf } from './client';
 
 const CONNECTOR_STATUS_PATH = '/connections/api/connectors/status';
 
@@ -57,12 +57,15 @@ export async function getUserConnectorStatus(attestationId: string): Promise<Con
 }
 
 /**
- * Live connector status for AgriFortress's own org identity — connectors an
- * org admin configures once for every supplier who uses this app (e.g.
- * Gemini's org-subsidized key), rather than each supplier connecting it.
+ * Live connector status for AgriFortress's own org-level connectors —
+ * connectors an org admin configures once for every supplier who uses this
+ * app (e.g. Gemini's org-subsidized key), rather than each supplier
+ * connecting it. Queried with the app's own self-authenticated identity
+ * (no consent attestation) since AgriFortress is checking a fact about
+ * itself, not acting on behalf of a supplier.
  */
 export async function getOrgConnectorStatus(): Promise<ConnectorStatus[]> {
-  const res = await fetchKernelAsOrg(CONNECTOR_STATUS_PATH, { method: 'GET' });
+  const res = await fetchKernelAsSelf(CONNECTOR_STATUS_PATH, { method: 'GET' });
   return readConnectorStatusResponse(res, 'connectors.status (org)');
 }
 
