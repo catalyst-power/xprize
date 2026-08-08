@@ -3,15 +3,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // ---------------------------------------------------------------------------
 // Fake TokenProvider — avoids real Ed25519 signing, network mints, and the
 // auto-refresh setInterval (already covered by kernel/auth.test.ts). Records
-// which attestationId each instance was constructed with so tests can assert
-// fetchKernel / fetchKernelAsOrg select the correct identity.
+// which attestationId each instance was constructed with (or none, for the
+// app's own self-authenticated identity) so tests can assert fetchKernel /
+// fetchKernelAsSelf select the correct identity.
 // ---------------------------------------------------------------------------
 
 interface FakeProviderOpts {
   kernelUrl: string;
   appDid: string;
   privateKey: string;
-  attestationId: string;
+  attestationId?: string;
 }
 
 vi.mock('./auth', () => {
@@ -21,7 +22,9 @@ vi.mock('./auth', () => {
       this.opts = opts;
     }
     async getToken(): Promise<string> {
-      return `token-for-${this.opts.attestationId}`;
+      return this.opts.attestationId
+        ? `token-for-${this.opts.attestationId}`
+        : 'token-for-self';
     }
     invalidate(): void {
       // no-op — no caching to invalidate in the fake
@@ -38,7 +41,6 @@ const ENV_KEYS = [
   'APP_DID',
   'APP_PRIVATE_KEY',
   'APP_ATTESTATION_ID',
-  'APP_ORG_ATTESTATION_ID',
 ] as const;
 
 const ORIGINAL_ENV: Record<string, string | undefined> = {};
@@ -46,10 +48,10 @@ const ORIGINAL_ENV: Record<string, string | undefined> = {};
 function clearCachedTokenProviders(): void {
   const g = globalThis as typeof globalThis & {
     __kernelTokenProvidersByAttestation?: unknown;
-    __kernelOrgTokenProvider?: unknown;
+    __kernelSelfTokenProvider?: unknown;
   };
   delete g.__kernelTokenProvidersByAttestation;
-  delete g.__kernelOrgTokenProvider;
+  delete g.__kernelSelfTokenProvider;
 }
 
 beforeEach(() => {
@@ -60,7 +62,6 @@ beforeEach(() => {
   process.env.APP_DID = 'did:imajin:testapp';
   process.env.APP_PRIVATE_KEY = 'a'.repeat(64);
   process.env.APP_ATTESTATION_ID = 'att-user-123';
-  process.env.APP_ORG_ATTESTATION_ID = 'att-org-456';
   clearCachedTokenProviders();
 });
 
@@ -135,40 +136,43 @@ describe('fetchKernel', () => {
 });
 
 // ---------------------------------------------------------------------------
-// fetchKernelAsOrg
+// fetchKernelAsSelf
 // ---------------------------------------------------------------------------
 
-describe('fetchKernelAsOrg', () => {
-  it('mints via the org-level attestation and attaches a Bearer token', async () => {
+describe('fetchKernelAsSelf', () => {
+  it('mints with no attestationId and attaches a Bearer token for the app itself', async () => {
     const fetchMock = stubDataFetch();
-    const { fetchKernelAsOrg } = await import('./client');
+    const { fetchKernelAsSelf } = await import('./client');
 
-    await fetchKernelAsOrg('/connections/api/connectors/status');
+    await fetchKernelAsSelf('/connections/api/connectors/status');
 
     expect(fetchMock).toHaveBeenCalledOnce();
     const [url, opts] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://test.imajin.ai/connections/api/connectors/status');
     expect((opts.headers as Record<string, string>).Authorization).toBe(
-      'Bearer token-for-att-org-456',
+      'Bearer token-for-self',
     );
   });
 
-  it('throws a descriptive error when APP_ORG_ATTESTATION_ID is missing', async () => {
-    delete process.env.APP_ORG_ATTESTATION_ID;
-    const { fetchKernelAsOrg } = await import('./client');
+  it('throws a descriptive error when APP_DID / APP_PRIVATE_KEY env vars are missing', async () => {
+    delete process.env.APP_DID;
+    const { fetchKernelAsSelf } = await import('./client');
 
-    await expect(fetchKernelAsOrg('/connections/api/connectors/status')).rejects.toThrow(
-      'APP_DID, APP_PRIVATE_KEY, and APP_ORG_ATTESTATION_ID',
+    await expect(fetchKernelAsSelf('/connections/api/connectors/status')).rejects.toThrow(
+      'APP_DID and APP_PRIVATE_KEY',
     );
   });
 
-  it('does not require APP_ORG_ATTESTATION_ID for plain fetchKernel calls', async () => {
-    delete process.env.APP_ORG_ATTESTATION_ID;
-    stubDataFetch();
-    const { fetchKernel } = await import('./client');
+  it('caches a single self token provider across calls (no per-attestation caching)', async () => {
+    const fetchMock = stubDataFetch();
+    const { fetchKernelAsSelf } = await import('./client');
 
-    await expect(
-      fetchKernel('/supply/api/lots', undefined, 'att-scott-456'),
-    ).resolves.toBeDefined();
+    await fetchKernelAsSelf('/connections/api/connectors/status');
+    await fetchKernelAsSelf('/connections/api/connectors/status');
+
+    const [, firstOpts] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [, secondOpts] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect((firstOpts.headers as Record<string, string>).Authorization).toBe('Bearer token-for-self');
+    expect((secondOpts.headers as Record<string, string>).Authorization).toBe('Bearer token-for-self');
   });
 });

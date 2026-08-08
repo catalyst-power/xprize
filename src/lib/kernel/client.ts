@@ -4,17 +4,19 @@
  * Attaches a short-lived Bearer token (via TokenProvider) to every request.
  * On unexpected 401s it invalidates the cached token and retries once.
  *
- * Two acting identities are supported, matching whose consent attestation
- * mints the token:
- *   - fetchKernel      — a specific supplier's own consent attestation, passed
- *                        in explicitly by the caller (pulled from that user's
- *                        session — see src/lib/session.ts). This app is
- *                        multi-user, so there is no single "the" supplier
- *                        attestation baked into env vars.
- *   - fetchKernelAsOrg — the app's own org-level attestation (APP_ORG_ATTESTATION_ID),
- *                        used for org-subsidized connectors (e.g. Gemini) that an
- *                        org admin configures once on the app's own Imajin profile
- *                        rather than per supplier.
+ * Two acting identities are supported:
+ *   - fetchKernel     — a specific supplier's own consent attestation, passed
+ *                       in explicitly by the caller (pulled from that user's
+ *                       session — see src/lib/session.ts). This app is
+ *                       multi-user, so there is no single "the" supplier
+ *                       attestation baked into env vars.
+ *   - fetchKernelAsSelf — the app's own identity (APP_DID + APP_PRIVATE_KEY),
+ *                       no consent attestation at all. Used when AgriFortress
+ *                       is checking a fact about *itself* (e.g. its own
+ *                       org-level connector configuration for Gemini) rather
+ *                       than acting on behalf of a supplier — there is no
+ *                       human to obtain consent from, so no attestation
+ *                       concept applies.
  */
 
 import { TokenProvider } from './auth';
@@ -23,8 +25,8 @@ const DEFAULT_KERNEL_URL = 'https://imajin.ai';
 
 // ---------------------------------------------------------------------------
 // TokenProviders — cached per attestation ID (one per acting supplier, plus
-// one for the org-level identity), since this app serves many suppliers
-// concurrently from the same process.
+// one for the app's own self-authenticated identity), since this app serves
+// many suppliers concurrently from the same process.
 // ---------------------------------------------------------------------------
 
 function getTokenProvider(attestationId: string): TokenProvider {
@@ -50,29 +52,28 @@ function getTokenProvider(attestationId: string): TokenProvider {
   return provider;
 }
 
-function getOrgTokenProvider(): TokenProvider {
-  const g = globalThis as typeof globalThis & { __kernelOrgTokenProvider?: TokenProvider };
+function getSelfTokenProvider(): TokenProvider {
+  const g = globalThis as typeof globalThis & { __kernelSelfTokenProvider?: TokenProvider };
 
-  if (!g.__kernelOrgTokenProvider) {
+  if (!g.__kernelSelfTokenProvider) {
     const appDid = process.env.APP_DID;
     const privateKey = process.env.APP_PRIVATE_KEY;
-    const attestationId = process.env.APP_ORG_ATTESTATION_ID;
     const kernelUrl = process.env.KERNEL_URL ?? DEFAULT_KERNEL_URL;
 
-    if (!appDid || !privateKey || !attestationId) {
-      throw new Error(
-        'Org-level kernel client requires APP_DID, APP_PRIVATE_KEY, and APP_ORG_ATTESTATION_ID env vars',
-      );
+    if (!appDid || !privateKey) {
+      throw new Error('Kernel client requires APP_DID and APP_PRIVATE_KEY env vars');
     }
 
-    g.__kernelOrgTokenProvider = new TokenProvider({ kernelUrl, appDid, privateKey, attestationId });
+    // No attestationId — the app authenticates as itself, not on behalf of
+    // any supplier.
+    g.__kernelSelfTokenProvider = new TokenProvider({ kernelUrl, appDid, privateKey });
   }
 
-  return g.__kernelOrgTokenProvider;
+  return g.__kernelSelfTokenProvider;
 }
 
 // ---------------------------------------------------------------------------
-// fetchKernel / fetchKernelAsOrg
+// fetchKernel / fetchKernelAsSelf
 // ---------------------------------------------------------------------------
 
 async function fetchWithProvider(
@@ -135,16 +136,18 @@ export async function fetchKernel(
 }
 
 /**
- * Fetch a kernel API endpoint acting as the app's own org-level identity
- * (APP_ORG_ATTESTATION_ID), for connectors an org admin configures once for
- * every supplier who uses this app (e.g. Gemini's org-subsidized key).
+ * Fetch a kernel API endpoint acting as the app's own identity — APP_DID +
+ * APP_PRIVATE_KEY only, no consent attestation and no `onBehalfOf`. Use this
+ * when AgriFortress is checking a fact about itself, e.g. its own org-level
+ * connector configuration (Gemini's org-subsidized key), rather than acting
+ * on behalf of a specific supplier.
  *
  * @example
- *   const res = await fetchKernelAsOrg('/connections/api/connectors/status');
+ *   const res = await fetchKernelAsSelf('/connections/api/connectors/status');
  */
-export async function fetchKernelAsOrg(
+export async function fetchKernelAsSelf(
   path: string,
   options?: RequestInit,
 ): Promise<Response> {
-  return fetchWithProvider(getOrgTokenProvider(), path, options);
+  return fetchWithProvider(getSelfTokenProvider(), path, options);
 }

@@ -128,7 +128,6 @@ Copy `.env.example` to `.env.local` and populate the following:
 | `APP_DID` | Yes (kernel calls) | The app's registered DID (`did:imajin:…`). Obtained after app registration. |
 | `APP_PRIVATE_KEY` | Yes (kernel calls) | Ed25519 seed as hex (32 bytes = 64 hex chars). Generated at registration. **Never commit.** |
 | `APP_ATTESTATION_ID` | No (deprecated for per-user calls) | **Deprecated** for real kernel calls (xprize#36) — this app is multi-user, so every request resolves the acting supplier's own attestation from their session cookie instead. Only read by `GET /api/health/kernel` (a connectivity smoke test) and the `src/__e2e__` harness (a fixed test-fixture identity). |
-| `APP_ORG_ATTESTATION_ID` | No | AgriFortress's own org-level consent attestation ID. Used only to check org-subsidized connector status (e.g. Gemini) on the Connected Services panel. Without it, that panel shows "status unavailable" for org-level connectors. |
 
 `APP_DID` and `APP_PRIVATE_KEY` are obtained through app registration (issue [#3](https://github.com/catalyst-power/xprize/issues/3) in the epic); each supplier's own `attestationId` comes from their consent flow and is stored on their session, never in env vars. The app runs and serves the health route without any of this configured — only kernel-authenticated routes require it.
 

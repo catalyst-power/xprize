@@ -141,6 +141,53 @@ describe('mintAppToken', () => {
       }),
     ).rejects.toThrow('404');
   });
+
+  it('omits attestationId from the request body when acting as the app itself', async () => {
+    const token = makeFakeJwt({ sub: TEST_APP_DID });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ token, expiresIn: 600, scopes: [] }),
+    }));
+
+    await mintAppToken({
+      kernelUrl: TEST_KERNEL_URL,
+      appDid: TEST_APP_DID,
+      privateKey: TEST_PRIV_KEY_HEX,
+    });
+
+    const [, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+
+    expect(body.attestationId).toBeUndefined();
+    expect('attestationId' in body).toBe(false);
+    expect(body.appDid).toBe(TEST_APP_DID);
+  });
+
+  it('signs the self challenge appDid:nonce:timestamp (no attestation segment)', async () => {
+    const token = makeFakeJwt({ sub: TEST_APP_DID });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ token, expiresIn: 600, scopes: [] }),
+    }));
+
+    await mintAppToken({
+      kernelUrl: TEST_KERNEL_URL,
+      appDid: TEST_APP_DID,
+      privateKey: TEST_PRIV_KEY_HEX,
+    });
+
+    const [, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit];
+    const { nonce, timestamp, signature } = JSON.parse(init.body as string) as {
+      nonce: string; timestamp: string; signature: string;
+    };
+
+    const challenge = `${TEST_APP_DID}:${nonce}:${timestamp}`;
+    const msgBytes  = new TextEncoder().encode(challenge);
+    const sigBytes  = Uint8Array.from(Buffer.from(signature, 'hex'));
+
+    const valid = await ed.verifyAsync(sigBytes, msgBytes, await ed.getPublicKeyAsync(TEST_SEED));
+    expect(valid).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -287,6 +334,25 @@ describe('TokenProvider', () => {
     expect(b).toBe('token-concurrent');
     expect(c).toBe('token-concurrent');
     expect(fetchSpy).toHaveBeenCalledOnce();
+
+    provider.dispose();
+  });
+
+  it('mints without an attestationId when constructed for the app itself', async () => {
+    const fetchSpy = stubFetchWithToken('token-self');
+    const provider = new TokenProvider({
+      kernelUrl: TEST_KERNEL_URL,
+      appDid: TEST_APP_DID,
+      privateKey: TEST_PRIV_KEY_HEX,
+      // attestationId intentionally omitted — self-authenticated identity
+    });
+
+    const token = await provider.getToken();
+
+    expect(token).toBe('token-self');
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect('attestationId' in body).toBe(false);
 
     provider.dispose();
   });

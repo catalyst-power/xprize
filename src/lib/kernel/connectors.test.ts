@@ -9,13 +9,13 @@ import type { ConnectorStatus } from './connectors';
 
 vi.mock('./client', () => ({
   fetchKernel: vi.fn(),
-  fetchKernelAsOrg: vi.fn(),
+  fetchKernelAsSelf: vi.fn(),
 }));
 
-import { fetchKernel, fetchKernelAsOrg } from './client';
+import { fetchKernel, fetchKernelAsSelf } from './client';
 
 const mockFetchKernel = vi.mocked(fetchKernel);
-const mockFetchKernelAsOrg = vi.mocked(fetchKernelAsOrg);
+const mockFetchKernelAsSelf = vi.mocked(fetchKernelAsSelf);
 
 afterEach(() => {
   vi.resetAllMocks();
@@ -63,7 +63,7 @@ describe('getUserConnectorStatus', () => {
     expect(path).toBe('/connections/api/connectors/status');
     expect(opts?.method).toBe('GET');
     expect(attestationId).toBe('att-scott-123');
-    expect(mockFetchKernelAsOrg).not.toHaveBeenCalled();
+    expect(mockFetchKernelAsSelf).not.toHaveBeenCalled();
   });
 
   it('returns the parsed ConnectorStatus[] on success', async () => {
@@ -88,20 +88,20 @@ describe('getUserConnectorStatus', () => {
 // ---------------------------------------------------------------------------
 
 describe('getOrgConnectorStatus', () => {
-  it('GETs /connections/api/connectors/status via fetchKernelAsOrg (org identity)', async () => {
-    mockFetchKernelAsOrg.mockReturnValue(okResponse(STATUS_RESPONSE));
+  it('GETs /connections/api/connectors/status via fetchKernelAsSelf (app self-identity, no attestation)', async () => {
+    mockFetchKernelAsSelf.mockReturnValue(okResponse(STATUS_RESPONSE));
 
     await getOrgConnectorStatus();
 
-    expect(mockFetchKernelAsOrg).toHaveBeenCalledOnce();
-    const [path, opts] = mockFetchKernelAsOrg.mock.calls[0];
+    expect(mockFetchKernelAsSelf).toHaveBeenCalledOnce();
+    const [path, opts] = mockFetchKernelAsSelf.mock.calls[0];
     expect(path).toBe('/connections/api/connectors/status');
     expect(opts?.method).toBe('GET');
     expect(mockFetchKernel).not.toHaveBeenCalled();
   });
 
   it('throws with status + statusText on a kernel error response', async () => {
-    mockFetchKernelAsOrg.mockReturnValue(errorResponse(500, 'Internal Server Error'));
+    mockFetchKernelAsSelf.mockReturnValue(errorResponse(500, 'Internal Server Error'));
 
     await expect(getOrgConnectorStatus()).rejects.toThrow(
       'connectors.status (org) failed: 500',

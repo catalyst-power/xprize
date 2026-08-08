@@ -124,10 +124,11 @@ Response 200: [{ id: string, connected: boolean, scopes: string[] }, ...]
 
 - Registry-generic — returns an entry for every connector in the kernel's registry (QuickBooks,
   Gemini, future Xero/Stripe/bank), not just the ones the app asks about.
-- Resolved for whichever identity's consent attestation minted the app-auth token (the acting
-  `userDid`). To check status for AgriFortress's own org-level connections (e.g. Gemini's
-  org-subsidized key) rather than a specific supplier's, mint the token with the org's own
-  attestation (`APP_ORG_ATTESTATION_ID`).
+- Resolved for whichever identity minted the app-auth token: a specific supplier's consent
+  attestation for per-user connectors (QuickBooks), or the app's own self-authenticated identity
+  (`APP_DID` + `APP_PRIVATE_KEY`, no attestation) for org-level connections AgriFortress checks
+  about itself (e.g. Gemini's org-subsidized key) — there's no human to obtain consent from for
+  that check, so no attestation concept applies.
 - **Never** returns credentials, config, or tokens — only the boolean + granted scopes.
 - **Live per render, never cached app-side.** A stale "connected" would be the app fabricating a
   fact it doesn't own (AGENTS.md §4).
@@ -196,7 +197,6 @@ IMAJIN_AUTH_URL=https://jin.imajin.ai/auth   # kernel auth service base
 IMAJIN_APP_DID=did:imajin:<app-did>          # this app's registered DID
 SESSION_SECRET=<random-secret>                # for local jose JWT signing
 NEXT_PUBLIC_APP_URL=https://integrity.imajin.ai  # public URL of this app
-APP_ORG_ATTESTATION_ID=<org-consent-attestation-id>  # org-level connectors (Gemini), #1540
 ```
 
 ## What NOT to do
