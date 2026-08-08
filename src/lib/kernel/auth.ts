@@ -105,7 +105,11 @@ export async function mintAppToken(opts: {
   const sigBytes = await ed.signAsync(msgBytes, privKeyBytes);
   const signature = bytesToHex(sigBytes);
 
-  const res = await fetch(`${kernelUrl}/auth/api/apps/token`, {
+  const endpoint = opts.attestationId
+    ? `${kernelUrl}/auth/api/apps/token`
+    : `${kernelUrl}/auth/api/apps/token/service`;
+
+  const res = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
