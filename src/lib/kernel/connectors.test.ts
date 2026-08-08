@@ -53,22 +53,23 @@ const STATUS_RESPONSE: ConnectorStatus[] = [
 // ---------------------------------------------------------------------------
 
 describe('getUserConnectorStatus', () => {
-  it('GETs /connections/api/connectors/status via fetchKernel', async () => {
+  it('GETs /connections/api/connectors/status via fetchKernel, passing the caller-supplied attestationId', async () => {
     mockFetchKernel.mockReturnValue(okResponse(STATUS_RESPONSE));
 
-    await getUserConnectorStatus();
+    await getUserConnectorStatus('att-scott-123');
 
     expect(mockFetchKernel).toHaveBeenCalledOnce();
-    const [path, opts] = mockFetchKernel.mock.calls[0];
+    const [path, opts, attestationId] = mockFetchKernel.mock.calls[0];
     expect(path).toBe('/connections/api/connectors/status');
     expect(opts?.method).toBe('GET');
+    expect(attestationId).toBe('att-scott-123');
     expect(mockFetchKernelAsOrg).not.toHaveBeenCalled();
   });
 
   it('returns the parsed ConnectorStatus[] on success', async () => {
     mockFetchKernel.mockReturnValue(okResponse(STATUS_RESPONSE));
 
-    const result = await getUserConnectorStatus();
+    const result = await getUserConnectorStatus('att-scott-123');
 
     expect(result).toEqual(STATUS_RESPONSE);
   });
@@ -76,7 +77,9 @@ describe('getUserConnectorStatus', () => {
   it('throws with status + statusText on a kernel error response', async () => {
     mockFetchKernel.mockReturnValue(errorResponse(403, 'Forbidden'));
 
-    await expect(getUserConnectorStatus()).rejects.toThrow('connectors.status failed: 403');
+    await expect(getUserConnectorStatus('att-scott-123')).rejects.toThrow(
+      'connectors.status failed: 403',
+    );
   });
 });
 

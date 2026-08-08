@@ -7,6 +7,11 @@
  * Acceptance criterion for issue #2:
  *   "Completes the app-auth handshake against the kernel and resolves a userDid."
  *
+ * This is a connectivity diagnostic, not a request made on behalf of a
+ * logged-in supplier — it's the one legitimate non-session use of
+ * APP_ATTESTATION_ID (xprize#36); real per-user kernel calls resolve the
+ * acting supplier's own attestation from their session instead.
+ *
  * Requires env vars: APP_DID, APP_PRIVATE_KEY, APP_ATTESTATION_ID
  */
 

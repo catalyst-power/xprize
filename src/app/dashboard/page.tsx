@@ -41,7 +41,9 @@ export default async function DashboardPage(props: { searchParams: SearchParams 
 
   // Pre-fill the delivery card from the supplier's most recent lot (supply:read, read-only).
   // Failure is non-fatal — the card renders with blank defaults on any network/auth error.
-  const priorLot: RecentLot | undefined = (await recentLots(user.did, 1).catch(() => [])).at(0);
+  const priorLot: RecentLot | undefined = (
+    await recentLots(user.did, user.attestationId, 1).catch(() => [])
+  ).at(0);
 
   const rawLot = searchParams['lot'];
   const lotId = typeof rawLot === 'string' ? rawLot : undefined;
@@ -75,7 +77,7 @@ export default async function DashboardPage(props: { searchParams: SearchParams 
 
         {/* Delivery gesture → receipt: gesture signs supply.received; receipt renders from it (#7) */}
         {lotId !== undefined
-          ? <DeliveryReceipt correlationId={lotId} />
+          ? <DeliveryReceipt correlationId={lotId} attestationId={user.attestationId} />
           : <DeliveryGesture priorLot={priorLot} />}
 
         {/* Auth debug */}

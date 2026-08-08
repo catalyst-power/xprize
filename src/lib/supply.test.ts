@@ -84,23 +84,24 @@ const RECENT_LOTS_RESPONSE = {
 // ---------------------------------------------------------------------------
 
 describe('recentLots', () => {
-  it('GETs /supply/api/lots with the supplier DID and limit encoded in the query string', async () => {
+  it('GETs /supply/api/lots with the supplier DID and limit encoded in the query string, passing attestationId to fetchKernel', async () => {
     mockFetch.mockReturnValue(okResponse(RECENT_LOTS_RESPONSE));
 
-    await recentLots('did:imajin:scott', 1);
+    await recentLots('did:imajin:scott', 'att-scott-123', 1);
 
     expect(mockFetch).toHaveBeenCalledOnce();
-    const [path, opts] = mockFetch.mock.calls[0];
+    const [path, opts, attestationId] = mockFetch.mock.calls[0];
     expect(opts?.method).toBe('GET');
     expect(path).toContain('/supply/api/lots');
     expect(path).toContain('supplier=did%3Aimajin%3Ascott');
     expect(path).toContain('limit=1');
+    expect(attestationId).toBe('att-scott-123');
   });
 
   it('uses limit=1 by default', async () => {
     mockFetch.mockReturnValue(okResponse(RECENT_LOTS_RESPONSE));
 
-    await recentLots('did:imajin:scott');
+    await recentLots('did:imajin:scott', 'att-scott-123');
 
     const [path] = mockFetch.mock.calls[0];
     expect(path).toContain('limit=1');
@@ -109,7 +110,7 @@ describe('recentLots', () => {
   it('returns the parsed RecentLot[] on success', async () => {
     mockFetch.mockReturnValue(okResponse(RECENT_LOTS_RESPONSE));
 
-    const result = await recentLots('did:imajin:scott', 1);
+    const result = await recentLots('did:imajin:scott', 'att-scott-123', 1);
 
     expect(result).toHaveLength(1);
     expect(result[0].correlationId).toBe('lot_abc123');
@@ -120,7 +121,7 @@ describe('recentLots', () => {
   it('returns an empty array when the supplier has no prior lots', async () => {
     mockFetch.mockReturnValue(okResponse({ lots: [] }));
 
-    const result = await recentLots('did:imajin:scott', 1);
+    const result = await recentLots('did:imajin:scott', 'att-scott-123', 1);
 
     expect(result).toEqual([]);
   });
@@ -128,7 +129,7 @@ describe('recentLots', () => {
   it('throws with status + error message on a kernel error response', async () => {
     mockFetch.mockReturnValue(errorResponse(403, { error: 'forbidden' }));
 
-    await expect(recentLots('did:imajin:scott', 1)).rejects.toThrow(
+    await expect(recentLots('did:imajin:scott', 'att-scott-123', 1)).rejects.toThrow(
       'supply.lots.read failed: 403',
     );
   });
@@ -143,7 +144,7 @@ describe('recentLots', () => {
       } as Response),
     );
 
-    await expect(recentLots('did:imajin:scott', 1)).rejects.toThrow(
+    await expect(recentLots('did:imajin:scott', 'att-scott-123', 1)).rejects.toThrow(
       'supply.lots.read failed: 500 Internal Server Error',
     );
   });
@@ -154,22 +155,26 @@ describe('recentLots', () => {
 // ---------------------------------------------------------------------------
 
 describe('declareSupplyLot', () => {
-  it('POSTs to /supply/api/declared with commodity/quantity/unit', async () => {
+  it('POSTs to /supply/api/declared with commodity/quantity/unit, passing attestationId to fetchKernel', async () => {
     mockFetch.mockReturnValue(okResponse(DECLARED_RESPONSE));
 
-    await declareSupplyLot({ commodity: 'eggs', quantity: 6, unit: 'dozen' });
+    await declareSupplyLot({ commodity: 'eggs', quantity: 6, unit: 'dozen' }, 'att-scott-123');
 
     expect(mockFetch).toHaveBeenCalledOnce();
-    const [path, opts] = mockFetch.mock.calls[0];
+    const [path, opts, attestationId] = mockFetch.mock.calls[0];
     expect(path).toBe('/supply/api/declared');
     expect(opts?.method).toBe('POST');
     expect(JSON.parse(opts?.body as string)).toEqual({ commodity: 'eggs', quantity: 6, unit: 'dozen' });
+    expect(attestationId).toBe('att-scott-123');
   });
 
   it('returns the parsed SupplyStageResponse on success', async () => {
     mockFetch.mockReturnValue(okResponse(DECLARED_RESPONSE));
 
-    const result = await declareSupplyLot({ commodity: 'eggs', quantity: 6, unit: 'dozen' });
+    const result = await declareSupplyLot(
+      { commodity: 'eggs', quantity: 6, unit: 'dozen' },
+      'att-scott-123',
+    );
 
     expect(result.ok).toBe(true);
     expect(result.correlationId).toBe('lot_abc123');
@@ -180,7 +185,7 @@ describe('declareSupplyLot', () => {
     mockFetch.mockReturnValue(errorResponse(400, { error: 'commodity is required' }));
 
     await expect(
-      declareSupplyLot({ commodity: '', quantity: 6, unit: 'dozen' }),
+      declareSupplyLot({ commodity: '', quantity: 6, unit: 'dozen' }, 'att-scott-123'),
     ).rejects.toThrow('supply.declared failed: 400');
   });
 });
@@ -190,30 +195,37 @@ describe('declareSupplyLot', () => {
 // ---------------------------------------------------------------------------
 
 describe('confirmDelivery', () => {
-  it('POSTs to /supply/api/received with lotId threaded from declared correlationId', async () => {
+  it('POSTs to /supply/api/received with lotId threaded from declared correlationId, passing attestationId to fetchKernel', async () => {
     mockFetch.mockReturnValue(okResponse(RECEIVED_RESPONSE));
 
-    await confirmDelivery({ lotId: 'lot_abc123', commodity: 'eggs', quantity: 6, unit: 'dozen' });
+    await confirmDelivery(
+      { lotId: 'lot_abc123', commodity: 'eggs', quantity: 6, unit: 'dozen' },
+      'att-scott-123',
+    );
 
     expect(mockFetch).toHaveBeenCalledOnce();
-    const [path, opts] = mockFetch.mock.calls[0];
+    const [path, opts, attestationId] = mockFetch.mock.calls[0];
     expect(path).toBe('/supply/api/received');
     expect(opts?.method).toBe('POST');
     const sent = JSON.parse(opts?.body as string) as Record<string, unknown>;
     expect(sent.lotId).toBe('lot_abc123');
     expect(sent.commodity).toBe('eggs');
+    expect(attestationId).toBe('att-scott-123');
   });
 
   it('includes priorCid in the body when provided', async () => {
     mockFetch.mockReturnValue(okResponse(RECEIVED_RESPONSE));
 
-    await confirmDelivery({
-      lotId: 'lot_abc123',
-      commodity: 'eggs',
-      quantity: 6,
-      unit: 'dozen',
-      priorCid: 'bafkreiabc',
-    });
+    await confirmDelivery(
+      {
+        lotId: 'lot_abc123',
+        commodity: 'eggs',
+        quantity: 6,
+        unit: 'dozen',
+        priorCid: 'bafkreiabc',
+      },
+      'att-scott-123',
+    );
 
     const [, opts] = mockFetch.mock.calls[0];
     const sent = JSON.parse(opts?.body as string) as Record<string, unknown>;
@@ -223,7 +235,10 @@ describe('confirmDelivery', () => {
   it('omits priorCid when not provided', async () => {
     mockFetch.mockReturnValue(okResponse(RECEIVED_RESPONSE));
 
-    await confirmDelivery({ lotId: 'lot_abc123', commodity: 'eggs', quantity: 6, unit: 'dozen' });
+    await confirmDelivery(
+      { lotId: 'lot_abc123', commodity: 'eggs', quantity: 6, unit: 'dozen' },
+      'att-scott-123',
+    );
 
     const [, opts] = mockFetch.mock.calls[0];
     const sent = JSON.parse(opts?.body as string) as Record<string, unknown>;
@@ -233,7 +248,10 @@ describe('confirmDelivery', () => {
   it('returns the parsed SupplyStageResponse on success', async () => {
     mockFetch.mockReturnValue(okResponse(RECEIVED_RESPONSE));
 
-    const result = await confirmDelivery({ lotId: 'lot_abc123', commodity: 'eggs', quantity: 6, unit: 'dozen' });
+    const result = await confirmDelivery(
+      { lotId: 'lot_abc123', commodity: 'eggs', quantity: 6, unit: 'dozen' },
+      'att-scott-123',
+    );
 
     expect(result.ok).toBe(true);
     expect(result.correlationId).toBe('lot_abc123');
@@ -244,7 +262,7 @@ describe('confirmDelivery', () => {
     mockFetch.mockReturnValue(errorResponse(400, { error: 'lotId is required' }));
 
     await expect(
-      confirmDelivery({ lotId: '', commodity: 'eggs', quantity: 6, unit: 'dozen' }),
+      confirmDelivery({ lotId: '', commodity: 'eggs', quantity: 6, unit: 'dozen' }, 'att-scott-123'),
     ).rejects.toThrow('supply.received failed: 400');
   });
 });
@@ -254,21 +272,22 @@ describe('confirmDelivery', () => {
 // ---------------------------------------------------------------------------
 
 describe('getLotChain', () => {
-  it('GETs /supply/api/lot/{correlationId}', async () => {
+  it('GETs /supply/api/lot/{correlationId}, passing attestationId to fetchKernel', async () => {
     mockFetch.mockReturnValue(okResponse(LOT_CHAIN_RESPONSE));
 
-    await getLotChain('lot_abc123');
+    await getLotChain('lot_abc123', 'att-scott-123');
 
     expect(mockFetch).toHaveBeenCalledOnce();
-    const [path, opts] = mockFetch.mock.calls[0];
+    const [path, opts, attestationId] = mockFetch.mock.calls[0];
     expect(path).toBe('/supply/api/lot/lot_abc123');
     expect(opts?.method).toBe('GET');
+    expect(attestationId).toBe('att-scott-123');
   });
 
   it('URL-encodes the correlationId in the path', async () => {
     mockFetch.mockReturnValue(okResponse(LOT_CHAIN_RESPONSE));
 
-    await getLotChain('lot/with/slashes');
+    await getLotChain('lot/with/slashes', 'att-scott-123');
 
     const [path] = mockFetch.mock.calls[0];
     expect(path).toBe('/supply/api/lot/lot%2Fwith%2Fslashes');
@@ -277,7 +296,7 @@ describe('getLotChain', () => {
   it('returns the parsed LotChain on success', async () => {
     mockFetch.mockReturnValue(okResponse(LOT_CHAIN_RESPONSE));
 
-    const result = await getLotChain('lot_abc123');
+    const result = await getLotChain('lot_abc123', 'att-scott-123');
 
     expect(result.lot.correlationId).toBe('lot_abc123');
     expect(result.lot.commodity).toBe('eggs');
@@ -288,7 +307,9 @@ describe('getLotChain', () => {
   it('throws with status + error message on a 404 response', async () => {
     mockFetch.mockReturnValue(errorResponse(404, { error: 'lot not found' }));
 
-    await expect(getLotChain('lot_missing')).rejects.toThrow('supply.lot.read failed: 404');
+    await expect(getLotChain('lot_missing', 'att-scott-123')).rejects.toThrow(
+      'supply.lot.read failed: 404',
+    );
   });
 
   it('throws with statusText when the error body is not parseable', async () => {
@@ -301,7 +322,7 @@ describe('getLotChain', () => {
       } as Response),
     );
 
-    await expect(getLotChain('lot_abc123')).rejects.toThrow(
+    await expect(getLotChain('lot_abc123', 'att-scott-123')).rejects.toThrow(
       'supply.lot.read failed: 500 Internal Server Error',
     );
   });

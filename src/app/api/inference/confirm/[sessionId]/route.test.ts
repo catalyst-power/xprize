@@ -87,7 +87,7 @@ describe('POST /api/inference/confirm/[sessionId] — success', () => {
 
     await POST(makeRequest('sess_xyz'), makeParams('sess_xyz'));
 
-    expect(mockConfirm).toHaveBeenCalledWith('sess_xyz');
+    expect(mockConfirm).toHaveBeenCalledWith('sess_xyz', SESSION_USER.attestationId);
   });
 });
 

@@ -64,18 +64,28 @@ describe('captureInference', () => {
     mockFetch.mockReturnValue(okResponse(CAPTURE_RESPONSE));
 
     const blob = new Blob(['audio'], { type: 'audio/webm' });
-    await captureInference(blob, 'voice.webm');
+    await captureInference(blob, 'att-scott-123', 'voice.webm');
 
     expect(mockFetch).toHaveBeenCalledOnce();
     const [path] = mockFetch.mock.calls[0];
     expect(path).toBe('/api/inference/capture');
   });
 
+  it('passes the attestationId to fetchKernel', async () => {
+    mockFetch.mockReturnValue(okResponse(CAPTURE_RESPONSE));
+
+    const blob = new Blob(['audio'], { type: 'audio/webm' });
+    await captureInference(blob, 'att-scott-123', 'voice.webm');
+
+    const [, , attestationId] = mockFetch.mock.calls[0];
+    expect(attestationId).toBe('att-scott-123');
+  });
+
   it('sends method POST', async () => {
     mockFetch.mockReturnValue(okResponse(CAPTURE_RESPONSE));
 
     const blob = new Blob(['audio'], { type: 'audio/webm' });
-    await captureInference(blob, 'voice.webm');
+    await captureInference(blob, 'att-scott-123', 'voice.webm');
 
     const [, opts] = mockFetch.mock.calls[0];
     expect(opts?.method).toBe('POST');
@@ -85,7 +95,7 @@ describe('captureInference', () => {
     mockFetch.mockReturnValue(okResponse(CAPTURE_RESPONSE));
 
     const blob = new Blob(['audio'], { type: 'audio/webm' });
-    await captureInference(blob, 'voice.webm');
+    await captureInference(blob, 'att-scott-123', 'voice.webm');
 
     const [, opts] = mockFetch.mock.calls[0];
     expect(opts?.body).toBeInstanceOf(FormData);
@@ -95,7 +105,7 @@ describe('captureInference', () => {
     mockFetch.mockReturnValue(okResponse(CAPTURE_RESPONSE));
 
     const blob = new Blob(['audio'], { type: 'audio/webm' });
-    await captureInference(blob, 'voice.webm');
+    await captureInference(blob, 'att-scott-123', 'voice.webm');
 
     const [, opts] = mockFetch.mock.calls[0];
     const form = opts?.body as FormData;
@@ -106,7 +116,7 @@ describe('captureInference', () => {
     mockFetch.mockReturnValue(okResponse(CAPTURE_RESPONSE));
 
     const blob = new Blob(['audio'], { type: 'audio/webm' });
-    await captureInference(blob, 'voice.webm');
+    await captureInference(blob, 'att-scott-123', 'voice.webm');
 
     const [, opts] = mockFetch.mock.calls[0];
     const form = opts?.body as FormData;
@@ -117,7 +127,7 @@ describe('captureInference', () => {
     mockFetch.mockReturnValue(okResponse(CAPTURE_RESPONSE));
 
     const blob = new Blob(['audio'], { type: 'audio/webm' });
-    await captureInference(blob, 'voice.webm');
+    await captureInference(blob, 'att-scott-123', 'voice.webm');
 
     const [, opts] = mockFetch.mock.calls[0];
     const form = opts?.body as FormData;
@@ -128,7 +138,7 @@ describe('captureInference', () => {
     mockFetch.mockReturnValue(okResponse(CAPTURE_RESPONSE));
 
     const blob = new Blob(['audio'], { type: 'audio/webm' });
-    await captureInference(blob);
+    await captureInference(blob, 'att-scott-123');
 
     const [, opts] = mockFetch.mock.calls[0];
     const form = opts?.body as FormData;
@@ -139,7 +149,7 @@ describe('captureInference', () => {
     mockFetch.mockReturnValue(okResponse(CAPTURE_RESPONSE));
 
     const file = new File(['audio'], 'recording.webm', { type: 'audio/webm' });
-    await captureInference(file);
+    await captureInference(file, 'att-scott-123');
 
     // Should not throw and should still send the file
     const [, opts] = mockFetch.mock.calls[0];
@@ -151,7 +161,7 @@ describe('captureInference', () => {
     mockFetch.mockReturnValue(okResponse(CAPTURE_RESPONSE));
 
     const blob = new Blob(['audio'], { type: 'audio/webm' });
-    const result = await captureInference(blob, 'voice.webm');
+    const result = await captureInference(blob, 'att-scott-123', 'voice.webm');
 
     expect(result.sessionId).toBe('sess_abc');
     expect(result.status).toBe('pending_confirm');
@@ -163,7 +173,7 @@ describe('captureInference', () => {
     mockFetch.mockReturnValue(errorResponse(400, { error: 'file is required' }));
 
     const blob = new Blob(['audio'], { type: 'audio/webm' });
-    await expect(captureInference(blob, 'voice.webm')).rejects.toThrow(
+    await expect(captureInference(blob, 'att-scott-123', 'voice.webm')).rejects.toThrow(
       'inference.capture failed: 400',
     );
   });
@@ -177,17 +187,26 @@ describe('confirmInference', () => {
   it('POSTs to /api/inference/confirm/{sessionId}', async () => {
     mockFetch.mockReturnValue(okResponse(CONFIRM_RESPONSE));
 
-    await confirmInference('sess_abc');
+    await confirmInference('sess_abc', 'att-scott-123');
 
     expect(mockFetch).toHaveBeenCalledOnce();
     const [path] = mockFetch.mock.calls[0];
     expect(path).toBe('/api/inference/confirm/sess_abc');
   });
 
+  it('passes the attestationId to fetchKernel', async () => {
+    mockFetch.mockReturnValue(okResponse(CONFIRM_RESPONSE));
+
+    await confirmInference('sess_abc', 'att-scott-123');
+
+    const [, , attestationId] = mockFetch.mock.calls[0];
+    expect(attestationId).toBe('att-scott-123');
+  });
+
   it('URL-encodes the sessionId', async () => {
     mockFetch.mockReturnValue(okResponse(CONFIRM_RESPONSE));
 
-    await confirmInference('sess abc/x');
+    await confirmInference('sess abc/x', 'att-scott-123');
 
     const [path] = mockFetch.mock.calls[0];
     expect(path).toBe('/api/inference/confirm/sess%20abc%2Fx');
@@ -196,7 +215,7 @@ describe('confirmInference', () => {
   it('sends method POST', async () => {
     mockFetch.mockReturnValue(okResponse(CONFIRM_RESPONSE));
 
-    await confirmInference('sess_abc');
+    await confirmInference('sess_abc', 'att-scott-123');
 
     const [, opts] = mockFetch.mock.calls[0];
     expect(opts?.method).toBe('POST');
@@ -205,7 +224,7 @@ describe('confirmInference', () => {
   it('returns the parsed InferenceConfirmResponse on success', async () => {
     mockFetch.mockReturnValue(okResponse(CONFIRM_RESPONSE));
 
-    const result = await confirmInference('sess_abc');
+    const result = await confirmInference('sess_abc', 'att-scott-123');
 
     expect(result.sessionId).toBe('sess_abc');
     expect(result.status).toBe('resolved');
@@ -215,7 +234,7 @@ describe('confirmInference', () => {
   it('throws with status + error message on kernel error response', async () => {
     mockFetch.mockReturnValue(errorResponse(404, { error: 'session not found' }));
 
-    await expect(confirmInference('sess_abc')).rejects.toThrow(
+    await expect(confirmInference('sess_abc', 'att-scott-123')).rejects.toThrow(
       'inference.confirm failed: 404',
     );
   });

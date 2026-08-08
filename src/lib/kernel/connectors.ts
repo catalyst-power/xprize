@@ -47,11 +47,12 @@ async function readConnectorStatusResponse(
 
 /**
  * Live connector status for the currently acting supplier (e.g. their own
- * QuickBooks connection). Resolved for whichever identity minted the
- * app-auth token (APP_ATTESTATION_ID).
+ * QuickBooks connection). `attestationId` must be the acting user's own
+ * session attestation (`SessionUser.attestationId` from `getSession()`) —
+ * never a value read from process.env, since this app serves many suppliers.
  */
-export async function getUserConnectorStatus(): Promise<ConnectorStatus[]> {
-  const res = await fetchKernel(CONNECTOR_STATUS_PATH, { method: 'GET' });
+export async function getUserConnectorStatus(attestationId: string): Promise<ConnectorStatus[]> {
+  const res = await fetchKernel(CONNECTOR_STATUS_PATH, { method: 'GET' }, attestationId);
   return readConnectorStatusResponse(res, 'connectors.status');
 }
 

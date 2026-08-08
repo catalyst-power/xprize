@@ -47,10 +47,11 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   let res: Response;
   try {
-    res = await fetchKernel(`/quickbooks/api/connect?${qs.toString()}`, {
-      method: 'POST',
-      redirect: 'manual',
-    });
+    res = await fetchKernel(
+      `/quickbooks/api/connect?${qs.toString()}`,
+      { method: 'POST', redirect: 'manual' },
+      user.attestationId,
+    );
   } catch (err) {
     console.error('[connectors/quickbooks/connect] Kernel request failed:', err);
     return redirectToDashboard(req, '?connect_error=quickbooks');

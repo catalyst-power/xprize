@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
   const filename = typeof filenameEntry === 'string' ? filenameEntry : undefined;
 
   try {
-    const result = await captureInference(fileEntry, filename);
+    const result = await captureInference(fileEntry, user.attestationId, filename);
     return NextResponse.json(result, { status: 200 });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
