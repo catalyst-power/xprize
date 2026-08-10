@@ -49,7 +49,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   try {
     res = await fetchKernel(
       `/quickbooks/api/connect?${qs.toString()}`,
-      { method: 'POST', redirect: 'manual' },
+      { method: 'GET', redirect: 'manual' },
       user.attestationId,
     );
   } catch (err) {

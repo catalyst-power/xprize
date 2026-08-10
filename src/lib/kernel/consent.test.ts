@@ -12,7 +12,8 @@ describe('AGRIFORTRESS_SCOPES', () => {
     expect(scopes).toContain('quickbooks:read');
     expect(scopes).toContain('quickbooks:write'); // receiver confirmation writes invoice on supplier's behalf
     expect(scopes).toContain('connectors:read-status'); // Connected Services panel (#1540)
-    expect(scopes).toHaveLength(8);
+    expect(scopes).toContain('infer:provide'); // Gemini inference pipeline
+    expect(scopes).toHaveLength(9);
   });
 });
 
