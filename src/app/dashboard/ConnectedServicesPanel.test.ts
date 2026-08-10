@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveConnectorState, connectorRowVariant } from './ConnectedServicesPanel';
+import { resolveConnectorState, connectorRowVariant, isConnectorVisible } from './ConnectedServicesPanel';
 import { REQUIRED_CONNECTORS } from './connectorRegistry';
 import type { ConnectorStatus } from '@/lib/kernel/connectors';
 
@@ -94,6 +94,41 @@ describe('connectorRowVariant', () => {
   it('returns "org-admin" for a not-connected org-level connector', () => {
     expect(connectorRowVariant({ connector: GEMINI, connected: false, checkFailed: false })).toBe(
       'org-admin',
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isConnectorVisible (xprize#47 — a farmer must never see "ask your org
+// admin" for a connector that is in fact working; org-level connectors are
+// invisible infrastructure unless connected or the check itself failed)
+// ---------------------------------------------------------------------------
+
+describe('isConnectorVisible', () => {
+  it('always shows a user-level connector, connected or not', () => {
+    expect(isConnectorVisible({ connector: QUICKBOOKS, connected: true, checkFailed: false })).toBe(
+      true,
+    );
+    expect(isConnectorVisible({ connector: QUICKBOOKS, connected: false, checkFailed: false })).toBe(
+      true,
+    );
+  });
+
+  it('shows a connected org-level connector as a status badge', () => {
+    expect(isConnectorVisible({ connector: GEMINI, connected: true, checkFailed: false })).toBe(
+      true,
+    );
+  });
+
+  it('shows a not-connected org-level connector when the status check itself failed', () => {
+    expect(isConnectorVisible({ connector: GEMINI, connected: false, checkFailed: true })).toBe(
+      true,
+    );
+  });
+
+  it('hides a genuinely not-connected org-level connector (no "ask your org admin")', () => {
+    expect(isConnectorVisible({ connector: GEMINI, connected: false, checkFailed: false })).toBe(
+      false,
     );
   });
 });

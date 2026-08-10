@@ -82,6 +82,24 @@ export function connectorRowVariant(state: ConnectorRenderState): ConnectorRowVa
 }
 
 /**
+ * Whether a connector row should be shown at all (xprize#47). Org-level
+ * connectors (e.g. Gemini) are invisible infrastructure a farmer cannot act
+ * on — the app's own status check only sees the app DID, and misses the
+ * kernel's brain-resolution DID walk (owner → app → registrant) that makes
+ * inference actually work (ima-jin/imajin-ai#1770 tracks aligning the
+ * status endpoint with that walk). Until then, showing "ask your org admin"
+ * for a connector that is in fact working is a false, confusing claim
+ * (AGENTS.md §4) — so an org-level connector is only ever surfaced once it
+ * is confirmed connected (a badge, not an ask), or when the check itself
+ * failed (which must never be silently swallowed). User-level connectors
+ * (e.g. QuickBooks) are always shown — the farmer can act on those directly.
+ */
+export function isConnectorVisible(state: ConnectorRenderState): boolean {
+  if (state.connector.level === 'user') return true;
+  return state.connected || state.checkFailed;
+}
+
+/**
  * Resolve this app's own origin for a same-app server-to-server fetch.
  * Prefers the configured public URL (matches the pattern in
  * src/app/api/connectors/quickbooks/connect/route.ts); falls back to the
@@ -161,7 +179,7 @@ function ConnectorStatusIndicator(
   if (variant === 'org-admin') {
     return (
       <span className="shrink-0 text-[10px] text-zinc-500 text-right max-w-[12rem]">
-        Ask your org admin to configure {connector.name}.
+        {connector.name} — pending configuration by your organization.
       </span>
     );
   }
@@ -218,6 +236,7 @@ export async function ConnectedServicesPanel(
   const states = REQUIRED_CONNECTORS.map((connector) =>
     resolveConnectorState(connector, statusByLevel.get(connector.level) ?? null),
   );
+  const visibleStates = states.filter(isConnectorVisible);
 
   return (
     <section className="space-y-4" aria-label="Connected Services">
@@ -225,7 +244,7 @@ export async function ConnectedServicesPanel(
         Connected Services
       </p>
       <ul className="space-y-3">
-        {states.map((state) => (
+        {visibleStates.map((state) => (
           <ConnectorRow key={state.connector.id} state={state} returnTo={returnTo} />
         ))}
       </ul>
