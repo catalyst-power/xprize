@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getReceiptUrl, resolveDeliveryFields } from './DeliveryGesture';
+import { getReceiptUrl, resolveDeliveryFields, resolveCaptureOutcome } from './DeliveryGesture';
 import type { RecentLot } from '@/lib/supply';
 
 // ---------------------------------------------------------------------------
@@ -79,5 +79,80 @@ describe('getReceiptUrl', () => {
 
   it('returns null when externalId is an empty string (kernel returned no lot id)', () => {
     expect(getReceiptUrl('')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveCaptureOutcome (xprize#48)
+//
+// The kernel returns HTTP 200 even for a pipeline-level failure (zero
+// candidate intents parsed); `sendCapture` must key off `capture.status`,
+// not `res.ok`, to avoid landing on a blank, unexplained delivery card.
+// ---------------------------------------------------------------------------
+
+describe('resolveCaptureOutcome', () => {
+  it('returns an error outcome when status is "failed", using the kernel-provided message', () => {
+    const outcome = resolveCaptureOutcome(
+      { sessionId: 's1', status: 'failed', error: 'No candidate intents inferred' },
+      undefined,
+    );
+    expect(outcome).toEqual({ kind: 'error', errorMessage: 'No candidate intents inferred' });
+  });
+
+  it('falls back to a default message when status is "failed" but no error string is provided', () => {
+    const outcome = resolveCaptureOutcome({ sessionId: 's1', status: 'failed' }, undefined);
+    expect(outcome.kind).toBe('error');
+    if (outcome.kind === 'error') {
+      expect(outcome.errorMessage).toMatch(/try again or fill in manually/i);
+    }
+  });
+
+  it('returns an editing outcome with a notice when candidateIntents is empty and there is no prior lot', () => {
+    const outcome = resolveCaptureOutcome(
+      { sessionId: 's1', status: 'ok', candidateIntents: [] },
+      undefined,
+    );
+    expect(outcome.kind).toBe('editing');
+    if (outcome.kind === 'editing') {
+      expect(outcome.notice).toBeDefined();
+      expect(outcome.fields.product).toBe('');
+    }
+  });
+
+  it('returns an editing outcome with a notice when candidateIntents is absent entirely and there is no prior lot', () => {
+    const outcome = resolveCaptureOutcome({ sessionId: 's1', status: 'ok' }, undefined);
+    expect(outcome.kind).toBe('editing');
+    if (outcome.kind === 'editing') {
+      expect(outcome.notice).toBeDefined();
+    }
+  });
+
+  it('does not show a notice when a prior lot can seed the fields, even with no inferred metadata', () => {
+    const outcome = resolveCaptureOutcome(
+      { sessionId: 's1', status: 'ok', candidateIntents: [] },
+      RECENT_LOT,
+    );
+    expect(outcome.kind).toBe('editing');
+    if (outcome.kind === 'editing') {
+      expect(outcome.notice).toBeUndefined();
+      expect(outcome.fields.product).toBe('eggs');
+    }
+  });
+
+  it('returns a plain editing outcome with no notice on a successful parse', () => {
+    const outcome = resolveCaptureOutcome(
+      {
+        sessionId: 's1',
+        status: 'ok',
+        candidateIntents: [
+          { intentType: 'delivery', metadata: { product: 'eggs', qty: 6, recipient: 'David' } },
+        ],
+      },
+      undefined,
+    );
+    expect(outcome).toEqual({
+      kind: 'editing',
+      fields: { product: 'eggs', qty: '6', unit: '', recipient: 'David', lot: '', notes: '' },
+    });
   });
 });
