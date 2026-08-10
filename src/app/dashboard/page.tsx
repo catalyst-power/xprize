@@ -29,6 +29,56 @@ export const dynamic = 'force-dynamic';
 
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
+// ---------------------------------------------------------------------------
+// Pure helpers — exported for testing
+// ---------------------------------------------------------------------------
+
+/**
+ * Read the `connect_error` flag set when a connector's own connect route
+ * (e.g. /api/connectors/quickbooks/connect) redirects back here on failure
+ * (xprize#46). Previously read but never surfaced, so failures were silent.
+ */
+export function resolveConnectError(
+  searchParams: Record<string, string | string[] | undefined>,
+): string | undefined {
+  const raw = searchParams['connect_error'];
+  return typeof raw === 'string' ? raw : undefined;
+}
+
+/** Human-readable label for a connector id, for display in the connect-error banner. */
+export function connectErrorLabel(connectError: string): string {
+  return connectError === 'quickbooks' ? 'QuickBooks' : connectError;
+}
+
+// ---------------------------------------------------------------------------
+// Sub-render
+// ---------------------------------------------------------------------------
+
+export function ConnectErrorBanner(props: Readonly<{ connectError: string }>) {
+  const { connectError } = props;
+  return (
+    <div
+      data-testid="connect-error-banner"
+      className="rounded-xl border border-red-800 bg-red-950/30 p-4 flex items-start justify-between"
+    >
+      <div>
+        <p className="text-sm font-medium text-red-400">Connection failed</p>
+        <p className="text-xs text-red-300 mt-1">
+          Could not connect {connectErrorLabel(connectError)}. Please try again or contact your
+          administrator.
+        </p>
+      </div>
+      <a
+        href="/dashboard"
+        aria-label="Dismiss"
+        className="shrink-0 pl-3 text-sm leading-none text-red-400 hover:text-red-200"
+      >
+        ×
+      </a>
+    </div>
+  );
+}
+
 export default async function DashboardPage(props: { searchParams: SearchParams }) {
   const [user, searchParams] = await Promise.all([getSession(), props.searchParams]);
 
@@ -47,6 +97,7 @@ export default async function DashboardPage(props: { searchParams: SearchParams 
 
   const rawLot = searchParams['lot'];
   const lotId = typeof rawLot === 'string' ? rawLot : undefined;
+  const connectError = resolveConnectError(searchParams);
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] p-6">
@@ -62,6 +113,9 @@ export default async function DashboardPage(props: { searchParams: SearchParams 
             Sign out
           </a>
         </header>
+
+        {/* Connect error — surfaced from a connector's connect route redirect (#46) */}
+        {connectError !== undefined && <ConnectErrorBanner connectError={connectError} />}
 
         {/* User card */}
         <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-5 space-y-1">
