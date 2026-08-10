@@ -37,6 +37,8 @@ export interface IntentMetadata {
 export interface CandidateIntent {
   intentType: string;
   metadata: IntentMetadata;
+  /** Kernel-assigned confidence for this candidate, in [0, 1]. Candidates are ranked by this value. */
+  confidence?: number;
 }
 
 export interface InferenceCaptureResponse {

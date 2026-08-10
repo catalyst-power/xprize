@@ -20,31 +20,22 @@
 
 import { useRef, useState } from 'react';
 import type { RecentLot } from '@/lib/supply';
+import type { CandidateIntent, InferenceCaptureResponse, IntentMetadata } from '@/lib/inference';
 
 // ---------------------------------------------------------------------------
 // Types (mirroring kernel spec from issue #5)
 // ---------------------------------------------------------------------------
 
-interface IntentMetadata {
-  product?: string;
-  qty?: number;
-  unit?: string;
-  recipient?: string;
-  lot?: string;
-  notes?: string;
-}
-
-interface CaptureResponse {
-  sessionId: string;
-  status: string;
-  candidateIntents?: Array<{ intentType: string; metadata: IntentMetadata }>;
-  /**
-   * Present when `status === 'failed'` — a pipeline-level failure (e.g. zero
-   * candidate intents parsed from the LLM response). The kernel still
-   * returns HTTP 200 for this case; `status` is the signal, not the HTTP code.
-   */
-  error?: string;
-}
+/**
+ * The full inference capture response, as returned by POST /api/inference/capture.
+ * Aliased from `InferenceCaptureResponse` (src/lib/inference.ts) so the debug
+ * panel below always reflects every field the kernel actually returns —
+ * never a narrowed local copy (xprize#49).
+ *
+ * Extended with the optional `error` field that the kernel adds on
+ * pipeline-level failures (xprize#48).
+ */
+export type CaptureResponse = InferenceCaptureResponse & { error?: string };
 
 interface ConfirmResponse {
   sessionId: string;
@@ -147,8 +138,33 @@ interface GestureState {
   fields?: DeliveryFields;
   attestationId?: string;
   errorMessage?: string;
+  /** The full inference capture response — kept for the always-visible debug panel below (xprize#49). */
+  captureResponse?: CaptureResponse;
   /** Informational, non-blocking — shown above the fields in the editing phase. */
   notice?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Post-capture state builder — exported for testing
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the 'editing' state from a successful capture response. The full
+ * `capture` response is retained verbatim as `captureResponse` — never
+ * discarded — so the Inference Debug panel can always show exactly what
+ * inference produced, not just the first candidate's fields (xprize#49).
+ */
+export function buildEditingState(
+  capture: CaptureResponse,
+  priorLot: RecentLot | undefined,
+): GestureState {
+  const meta = capture.candidateIntents?.at(0)?.metadata ?? {};
+  return {
+    phase: 'editing',
+    sessionId: capture.sessionId,
+    fields: resolveDeliveryFields(meta, priorLot),
+    captureResponse: capture,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -163,6 +179,72 @@ const DELIVERY_FIELDS: ReadonlyArray<[keyof DeliveryFields, string, 'text' | 'nu
   ['lot', 'Lot', 'text'],
   ['notes', 'Notes', 'text'],
 ];
+
+// ---------------------------------------------------------------------------
+// Inference debug panel — pure, no hooks; ALWAYS visible while editing or
+// submitting. The operator needs MORE information to debug inference, not
+// less — never hide, collapse, or drop candidates/fields here (xprize#49).
+// ---------------------------------------------------------------------------
+
+function CandidateIntentDebug(props: Readonly<{ intent: CandidateIntent }>) {
+  const { intent } = props;
+  const confidencePct = Math.round((intent.confidence ?? 0) * 100);
+
+  return (
+    <div className="space-y-1 border-t border-zinc-800/40 pt-2 mt-2">
+      <div className="flex justify-between">
+        <span className="text-zinc-400">{intent.intentType}</span>
+        <span className="text-zinc-500">{confidencePct}%</span>
+      </div>
+      <pre className="text-zinc-600 text-[10px] whitespace-pre-wrap">
+        {JSON.stringify(intent.metadata, null, 2)}
+      </pre>
+    </div>
+  );
+}
+
+export function InferenceDebugPanel(
+  props: Readonly<{ captureResponse: CaptureResponse | undefined }>,
+) {
+  const { captureResponse } = props;
+  if (captureResponse === undefined) return null;
+
+  const candidates = captureResponse.candidateIntents ?? [];
+
+  return (
+    <section className="rounded-xl border border-zinc-800/60 p-4 space-y-2">
+      <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">
+        Inference Response
+      </p>
+
+      <div className="text-xs font-mono space-y-1">
+        <div className="flex justify-between gap-3">
+          <span className="text-zinc-500 shrink-0">Session ID</span>
+          <span className="text-zinc-300 break-all">{captureResponse.sessionId}</span>
+        </div>
+        <div className="flex justify-between gap-3">
+          <span className="text-zinc-500 shrink-0">Status</span>
+          <span className="text-zinc-300">{captureResponse.status}</span>
+        </div>
+        {captureResponse.assetId !== undefined && (
+          <div className="flex justify-between gap-3">
+            <span className="text-zinc-500 shrink-0">Asset ID</span>
+            <span className="text-zinc-300 break-all">{captureResponse.assetId}</span>
+          </div>
+        )}
+      </div>
+
+      <div className="pt-1">
+        <p className="text-xs text-zinc-500 mb-1">Candidate Intents</p>
+        {candidates.length === 0
+          ? <p className="text-xs text-zinc-600">No candidates returned.</p>
+          : candidates.map((intent) => (
+              <CandidateIntentDebug key={JSON.stringify(intent)} intent={intent} />
+            ))}
+      </div>
+    </section>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Component
@@ -213,6 +295,7 @@ export function DeliveryGesture({ priorLot }: DeliveryGestureProps) {
       sessionId: capture.sessionId,
       fields: outcome.fields,
       notice: outcome.notice,
+      captureResponse: capture,
     });
   }
 
@@ -351,44 +434,49 @@ export function DeliveryGesture({ priorLot }: DeliveryGestureProps) {
     };
 
     return (
-      <section className="rounded-xl border border-zinc-700 bg-zinc-900 p-5 space-y-4">
-        <div>
-          <p className="text-sm font-medium text-zinc-200">Delivery card</p>
-          <p className="text-xs text-zinc-500 mt-1">
-            AI-inferred. All fields are editable — you confirm and sign.
-          </p>
-        </div>
+      <div className="space-y-4">
+        <section className="rounded-xl border border-zinc-700 bg-zinc-900 p-5 space-y-4">
+          <div>
+            <p className="text-sm font-medium text-zinc-200">Delivery card</p>
+            <p className="text-xs text-zinc-500 mt-1">
+              AI-inferred. All fields are editable — you confirm and sign.
+            </p>
+          </div>
 
-        {state.notice !== undefined && (
-          <p className="text-xs text-amber-300 bg-amber-950/30 border border-amber-800 rounded-lg px-3 py-2">
-            {state.notice}
-          </p>
-        )}
+          {state.notice !== undefined && (
+            <p className="text-xs text-amber-300 bg-amber-950/30 border border-amber-800 rounded-lg px-3 py-2">
+              {state.notice}
+            </p>
+          )}
 
-        <div className="space-y-3">
-          {DELIVERY_FIELDS.map(([key, label, inputType]) => (
-            <div key={key} className="space-y-1">
-              <label className="text-xs text-zinc-400">{label}</label>
-              <input
-                type={inputType}
-                value={fields[key]}
-                onChange={(e) => updateField(key, e.target.value)}
-                disabled={isSubmitting}
-                className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white placeholder:text-zinc-600 focus:border-zinc-500 focus:outline-none disabled:opacity-50"
-              />
-            </div>
-          ))}
-        </div>
+          <div className="space-y-3">
+            {DELIVERY_FIELDS.map(([key, label, inputType]) => (
+              <div key={key} className="space-y-1">
+                <label className="text-xs text-zinc-400">{label}</label>
+                <input
+                  type={inputType}
+                  value={fields[key]}
+                  onChange={(e) => updateField(key, e.target.value)}
+                  disabled={isSubmitting}
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white placeholder:text-zinc-600 focus:border-zinc-500 focus:outline-none disabled:opacity-50"
+                />
+              </div>
+            ))}
+          </div>
 
-        <button
-          type="button"
-          onClick={() => void handleConfirm()}
-          disabled={isSubmitting}
-          className="w-full rounded-lg bg-white px-4 py-2.5 text-sm font-semibold text-black hover:bg-zinc-100 disabled:opacity-50 transition-colors"
-        >
-          {isSubmitting ? 'Signing…' : 'Confirm delivery'}
-        </button>
-      </section>
+          <button
+            type="button"
+            onClick={() => void handleConfirm()}
+            disabled={isSubmitting}
+            className="w-full rounded-lg bg-white px-4 py-2.5 text-sm font-semibold text-black hover:bg-zinc-100 disabled:opacity-50 transition-colors"
+          >
+            {isSubmitting ? 'Signing…' : 'Confirm delivery'}
+          </button>
+        </section>
+
+        {/* Inference Debug — always visible; never collapsed or hidden (xprize#49) */}
+        <InferenceDebugPanel captureResponse={state.captureResponse} />
+      </div>
     );
   }
 

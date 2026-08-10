@@ -1,4 +1,6 @@
+import { redirect } from 'next/navigation';
 import { buildConsentUrl } from '@/lib/kernel/consent';
+import { getSession } from '@/lib/session';
 
 const AUTH_ERRORS: Record<string, string> = {
   missing_params:      'Authorization cancelled — missing parameters.',
@@ -12,7 +14,17 @@ interface Props {
   searchParams: Promise<{ auth_error?: string }>;
 }
 
+// Previously this page always showed "Sign in with Imajin", even for a
+// visitor with a still-valid session cookie (xprize#53). A session check
+// here is a redirect-only read of getSession() — it does not mint, refresh,
+// or otherwise mutate the session; the dashboard remains the sole page that
+// gates its own access.
 export default async function Home({ searchParams }: Props) {
+  const user = await getSession();
+  if (user) {
+    redirect('/dashboard');
+  }
+
   const { auth_error } = await searchParams;
   const errorMessage = auth_error ? (AUTH_ERRORS[auth_error] ?? 'Sign-in failed. Please try again.') : null;
 
