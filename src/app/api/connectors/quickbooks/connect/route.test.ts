@@ -71,8 +71,23 @@ describe('GET /api/connectors/quickbooks/connect', () => {
     const url = new URL(path, 'https://kernel.example');
     expect(url.pathname).toBe('/quickbooks/api/connect');
     expect(url.searchParams.get('onBehalfOf')).toBe('did:imajin:scott');
-    expect(url.searchParams.get('returnTo')).toBe('https://integrity.imajin.ai/dashboard');
+    expect(url.searchParams.get('returnTo')).toBe('/dashboard');
     expect(opts?.redirect).toBe('manual');
+  });
+
+  it('sends returnTo as a relative path, never an absolute URL (xprize#46: kernel sanitizeReturnTo rejects absolute URLs)', async () => {
+    mockGetSession.mockResolvedValue(SESSION_USER);
+    mockFetchKernel.mockResolvedValue(kernelResponse({ location: 'https://intuit.example/oauth' }));
+    process.env.NEXT_PUBLIC_APP_URL = 'https://integrity.imajin.ai';
+
+    await GET(makeReq());
+
+    const [path] = mockFetchKernel.mock.calls[0];
+    const url = new URL(path, 'https://kernel.example');
+    const returnTo = url.searchParams.get('returnTo');
+    expect(returnTo).toBe('/dashboard');
+    expect(returnTo?.startsWith('/')).toBe(true);
+    expect(returnTo).not.toMatch(/^https?:\/\//);
   });
 
   it('forwards the kernel redirect (to Intuit) to the browser', async () => {

@@ -41,8 +41,12 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     return redirectHome(req);
   }
 
-  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || req.nextUrl.origin).replace(/\/$/, '');
-  const returnTo = `${appUrl}/dashboard`;
+  // Relative path only — the kernel's sanitizeReturnTo rejects absolute URLs
+  // (xprize#46). The kernel resolves this against its own origin for the
+  // OAuth callback landing; the app's own `?returnTo=` query param on the
+  // button href (see ConnectedServicesPanel) is a separate, already-working
+  // mechanism.
+  const returnTo = '/dashboard';
   const qs = new URLSearchParams({ onBehalfOf: user.did, returnTo });
 
   let res: Response;
