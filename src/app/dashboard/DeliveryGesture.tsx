@@ -31,8 +31,11 @@ import type { CandidateIntent, InferenceCaptureResponse, IntentMetadata } from '
  * Aliased from `InferenceCaptureResponse` (src/lib/inference.ts) so the debug
  * panel below always reflects every field the kernel actually returns —
  * never a narrowed local copy (xprize#49).
+ *
+ * Extended with the optional `error` field that the kernel adds on
+ * pipeline-level failures (xprize#48).
  */
-export type CaptureResponse = InferenceCaptureResponse;
+export type CaptureResponse = InferenceCaptureResponse & { error?: string };
 
 interface ConfirmResponse {
   sessionId: string;
@@ -91,6 +94,42 @@ export function resolveDeliveryFields(
   };
 }
 
+const DEFAULT_FAILED_MESSAGE =
+  'Could not understand the voice note — try again or fill in manually.';
+const ZERO_CANDIDATE_NOTICE =
+  "We heard your voice note but couldn't extract details — fill in the fields below.";
+
+type CaptureOutcome =
+  | { kind: 'error'; errorMessage: string }
+  | { kind: 'editing'; fields: DeliveryFields; notice?: string };
+
+/**
+ * Decide the UI outcome for a capture response, honoring the claim boundary
+ * (AGENTS.md §4): a pipeline-level failure (`status === 'failed'`, e.g. zero
+ * candidate intents parsed) must surface as an honest error — never a blank
+ * card — even though the kernel returns HTTP 200 for it. A parse that
+ * succeeded but extracted nothing useful still lets the user edit manually,
+ * but with an informational notice rather than silence.
+ */
+export function resolveCaptureOutcome(
+  capture: CaptureResponse,
+  priorLot: RecentLot | undefined,
+): CaptureOutcome {
+  if (capture.status === 'failed') {
+    return { kind: 'error', errorMessage: capture.error ?? DEFAULT_FAILED_MESSAGE };
+  }
+
+  const meta = capture.candidateIntents?.at(0)?.metadata ?? {};
+  const hasAnyMeta = Object.values(meta).some((v) => v !== undefined && v !== '' && v !== null);
+  const fields = resolveDeliveryFields(meta, priorLot);
+
+  if (!hasAnyMeta && priorLot === undefined) {
+    return { kind: 'editing', fields, notice: ZERO_CANDIDATE_NOTICE };
+  }
+
+  return { kind: 'editing', fields };
+}
+
 type Phase = 'idle' | 'recording' | 'capturing' | 'editing' | 'submitting' | 'done' | 'error';
 
 interface GestureState {
@@ -101,6 +140,8 @@ interface GestureState {
   errorMessage?: string;
   /** The full inference capture response — kept for the always-visible debug panel below (xprize#49). */
   captureResponse?: CaptureResponse;
+  /** Informational, non-blocking — shown above the fields in the editing phase. */
+  notice?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -244,7 +285,18 @@ export function DeliveryGesture({ priorLot }: DeliveryGestureProps) {
       return;
     }
 
-    setState(buildEditingState(capture, priorLot));
+    const outcome = resolveCaptureOutcome(capture, priorLot);
+    if (outcome.kind === 'error') {
+      setState({ phase: 'error', errorMessage: outcome.errorMessage });
+      return;
+    }
+    setState({
+      phase: 'editing',
+      sessionId: capture.sessionId,
+      fields: outcome.fields,
+      notice: outcome.notice,
+      captureResponse: capture,
+    });
   }
 
   // --- Voice recording ---
@@ -390,6 +442,12 @@ export function DeliveryGesture({ priorLot }: DeliveryGestureProps) {
               AI-inferred. All fields are editable — you confirm and sign.
             </p>
           </div>
+
+          {state.notice !== undefined && (
+            <p className="text-xs text-amber-300 bg-amber-950/30 border border-amber-800 rounded-lg px-3 py-2">
+              {state.notice}
+            </p>
+          )}
 
           <div className="space-y-3">
             {DELIVERY_FIELDS.map(([key, label, inputType]) => (
