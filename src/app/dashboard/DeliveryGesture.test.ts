@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { getReceiptUrl, resolveDeliveryFields } from './DeliveryGesture';
+import {
+  buildEditingState,
+  getReceiptUrl,
+  InferenceDebugPanel,
+  resolveDeliveryFields,
+  type CaptureResponse,
+} from './DeliveryGesture';
 import type { RecentLot } from '@/lib/supply';
 
 // ---------------------------------------------------------------------------
@@ -79,5 +85,141 @@ describe('getReceiptUrl', () => {
 
   it('returns null when externalId is an empty string (kernel returned no lot id)', () => {
     expect(getReceiptUrl('')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildEditingState
+//
+// The full inference capture response is retained verbatim in state so the
+// Inference Debug panel can always show what inference produced — never
+// discarded after only the first candidate's fields are extracted (#49).
+// ---------------------------------------------------------------------------
+
+const CAPTURE_RESPONSE: CaptureResponse = {
+  sessionId: 'sess-1',
+  assetId: 'asset-1',
+  status: 'pending_confirm',
+  candidateIntents: [
+    { intentType: 'supply.received', metadata: { product: 'eggs', qty: 6 }, confidence: 0.9 },
+  ],
+};
+
+describe('buildEditingState', () => {
+  it('stores the full capture response in captureResponse', () => {
+    const state = buildEditingState(CAPTURE_RESPONSE, undefined);
+    expect(state.captureResponse).toBe(CAPTURE_RESPONSE);
+  });
+
+  it('sets phase to editing and carries over the sessionId', () => {
+    const state = buildEditingState(CAPTURE_RESPONSE, undefined);
+    expect(state.phase).toBe('editing');
+    expect(state.sessionId).toBe('sess-1');
+  });
+
+  it('pre-fills fields from the first candidate intent metadata', () => {
+    const state = buildEditingState(CAPTURE_RESPONSE, undefined);
+    expect(state.fields?.product).toBe('eggs');
+    expect(state.fields?.qty).toBe('6');
+  });
+
+  it('retains captureResponse even when there are no candidate intents (e.g. a failed inference)', () => {
+    const failed: CaptureResponse = { sessionId: 'sess-2', assetId: 'asset-2', status: 'failed' };
+    const state = buildEditingState(failed, undefined);
+    expect(state.captureResponse).toBe(failed);
+    expect(state.fields?.product).toBe('');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// InferenceDebugPanel
+//
+// Always-visible debug section (never collapsed, hidden, or removed —
+// AGENTS.md constraint from #49). Shows every candidate intent, not just
+// the first, each with its confidence and full metadata.
+// ---------------------------------------------------------------------------
+
+function collectText(node: unknown): string[] {
+  if (node === null || node === undefined || typeof node === 'boolean') return [];
+  if (typeof node === 'string' || typeof node === 'number') return [String(node)];
+  if (Array.isArray(node)) return node.flatMap(collectText);
+  if (typeof node === 'object' && 'type' in node) {
+    const element = node as { type: unknown; props?: { children?: unknown } };
+    // Nested function components (e.g. CandidateIntentDebug) are never actually
+    // invoked by JSX/React.createElement — render one level deeper ourselves so
+    // their output is visible to the assertions below.
+    if (typeof element.type === 'function') {
+      return collectText((element.type as (props: unknown) => unknown)(element.props));
+    }
+    return collectText(element.props?.children);
+  }
+  return [];
+}
+
+function textOf(node: unknown): string {
+  // No separator: sibling text nodes (e.g. a number and a literal '%') must
+  // concatenate exactly as they render, e.g. "90%" not "90 %".
+  return collectText(node).join('');
+}
+
+describe('InferenceDebugPanel', () => {
+  it('renders nothing when there is no capture response', () => {
+    expect(InferenceDebugPanel({ captureResponse: undefined })).toBeNull();
+  });
+
+  it('shows the session id, status, and asset id', () => {
+    const text = textOf(
+      InferenceDebugPanel({
+        captureResponse: { sessionId: 'sess-1', assetId: 'asset-1', status: 'pending_confirm' },
+      }),
+    );
+    expect(text).toContain('sess-1');
+    expect(text).toContain('pending_confirm');
+    expect(text).toContain('asset-1');
+  });
+
+  it('shows "No candidates returned." when candidateIntents is an empty array', () => {
+    const text = textOf(
+      InferenceDebugPanel({
+        captureResponse: {
+          sessionId: 'sess-1',
+          assetId: 'asset-1',
+          status: 'pending_confirm',
+          candidateIntents: [],
+        },
+      }),
+    );
+    expect(text).toContain('No candidates returned.');
+  });
+
+  it('shows "No candidates returned." when candidateIntents is absent (e.g. a failed inference)', () => {
+    const text = textOf(
+      InferenceDebugPanel({
+        captureResponse: { sessionId: 'sess-1', assetId: 'asset-1', status: 'failed' },
+      }),
+    );
+    expect(text).toContain('No candidates returned.');
+  });
+
+  it('renders every candidate intent (not just the first) with confidence as a percentage and full metadata', () => {
+    const text = textOf(
+      InferenceDebugPanel({
+        captureResponse: {
+          sessionId: 'sess-1',
+          assetId: 'asset-1',
+          status: 'pending_confirm',
+          candidateIntents: [
+            { intentType: 'supply.received', metadata: { product: 'eggs' }, confidence: 0.9 },
+            { intentType: 'delivery.noted', metadata: { notes: 'left at gate' }, confidence: 0.42 },
+          ],
+        },
+      }),
+    );
+    expect(text).toContain('supply.received');
+    expect(text).toContain('90%');
+    expect(text).toContain('delivery.noted');
+    expect(text).toContain('42%');
+    expect(text).toContain('eggs');
+    expect(text).toContain('left at gate');
   });
 });

@@ -7,7 +7,8 @@
  * the token is invalid/expired.
  *
  * Layout (top → bottom):
- *   Header → User card → Connected Services (status only) → Delivery gesture | receipt → Attestation
+ *   Header → User card → Connected Services (status only) → Delivery gesture | receipt
+ *   → Recent Deliveries (#49) → Attestation
  *
  * Connected Services is a live status panel — it never asks the user to
  * configure connector credentials (the app owns those). It must NOT appear
@@ -79,6 +80,43 @@ export function ConnectErrorBanner(props: Readonly<{ connectError: string }>) {
   );
 }
 
+/**
+ * Recent Deliveries — a read-only list of the supplier's most recent signed
+ * lots (supply:read). Hidden entirely when there are no prior lots; renders
+ * nothing else conditionally — every lot the kernel returns is shown (#49).
+ */
+export function RecentDeliveries(props: Readonly<{ lots: RecentLot[] }>) {
+  const { lots } = props;
+  if (lots.length === 0) return null;
+
+  return (
+    <section className="space-y-3" data-testid="recent-deliveries">
+      <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">
+        Recent Deliveries
+      </p>
+      <ul className="space-y-2">
+        {lots.map((lot) => (
+          <li
+            key={lot.correlationId}
+            className="rounded-xl border border-zinc-800 bg-zinc-900 p-3 flex justify-between items-center"
+          >
+            <div>
+              <p className="text-sm text-white">{lot.commodity ?? 'Delivery'}</p>
+              <p className="text-xs text-zinc-500">{lot.correlationId}</p>
+            </div>
+            <a
+              href={`/dashboard?lot=${encodeURIComponent(lot.correlationId)}`}
+              className="text-xs text-zinc-400 hover:text-zinc-200"
+            >
+              View →
+            </a>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export default async function DashboardPage(props: { searchParams: SearchParams }) {
   const [user, searchParams] = await Promise.all([getSession(), props.searchParams]);
 
@@ -89,11 +127,12 @@ export default async function DashboardPage(props: { searchParams: SearchParams 
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? '').replace(/\/$/, '');
   const returnTo = `${appUrl}/dashboard`;
 
-  // Pre-fill the delivery card from the supplier's most recent lot (supply:read, read-only).
-  // Failure is non-fatal — the card renders with blank defaults on any network/auth error.
-  const priorLot: RecentLot | undefined = (
-    await recentLots(user.did, user.attestationId, 1).catch(() => [])
-  ).at(0);
+  // Fetch the supplier's most recent lots (supply:read, read-only) once, shared by
+  // both the delivery card pre-fill (most recent lot) and the Recent Deliveries list
+  // below (#49). Failure is non-fatal — the page renders with an empty list on any
+  // network/auth error rather than failing the whole dashboard.
+  const recentLotsList: RecentLot[] = await recentLots(user.did, user.attestationId, 5).catch(() => []);
+  const priorLot: RecentLot | undefined = recentLotsList.at(0);
 
   const rawLot = searchParams['lot'];
   const lotId = typeof rawLot === 'string' ? rawLot : undefined;
@@ -133,6 +172,9 @@ export default async function DashboardPage(props: { searchParams: SearchParams 
         {lotId !== undefined
           ? <DeliveryReceipt correlationId={lotId} attestationId={user.attestationId} />
           : <DeliveryGesture priorLot={priorLot} />}
+
+        {/* Recent Deliveries — read-only list of the supplier's most recent signed lots (#49) */}
+        <RecentDeliveries lots={recentLotsList} />
 
         {/* Auth debug */}
         <section className="rounded-xl border border-zinc-800/60 p-4">
