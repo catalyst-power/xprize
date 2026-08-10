@@ -24,6 +24,8 @@ const DEFAULT_KERNEL_URL = 'https://imajin.ai';
  *                            connected + its granted scopes, never the credential
  *                            itself (ima-jin/imajin-ai#1540; powers the dashboard's
  *                            Connected Services panel)
+ * infer:provide            — provide app-owned inference credentials for delegated
+ *                            inference (Gemini voice/photo → intent pipeline)
  */
 export const AGRIFORTRESS_SCOPES = [
   'supply:read',
@@ -34,6 +36,7 @@ export const AGRIFORTRESS_SCOPES = [
   'quickbooks:read',
   'quickbooks:write',
   'connectors:read-status',
+  'infer:provide',
 ] as const;
 
 export interface ConsentUrlOptions {
