@@ -91,9 +91,18 @@ async function fetchWithProvider(
     ? {}
     : { 'Content-Type': 'application/json' };
 
+  // Dual-guard kernel routes (resolveEffectiveDid) only enter the app-auth
+  // branch when this header is present — without it, the bearer app token
+  // is mistaken for a kernel web session and 401s (see xprize#71). Omit the
+  // header entirely rather than sending the literal string 'undefined' if
+  // APP_DID isn't configured.
+  const appDid = process.env.APP_DID;
+  const appDidHeaders: Record<string, string> = appDid ? { 'X-App-DID': appDid } : {};
+
   const headers = {
     ...baseHeaders,
     ...options?.headers,
+    ...appDidHeaders,
     Authorization: `Bearer ${token}`,
   };
 
@@ -105,7 +114,7 @@ async function fetchWithProvider(
     const freshToken = await provider.getToken();
     return fetch(url, {
       ...options,
-      headers: { ...headers, Authorization: `Bearer ${freshToken}` },
+      headers: { ...headers, ...appDidHeaders, Authorization: `Bearer ${freshToken}` },
       cache: 'no-store',
     });
   }

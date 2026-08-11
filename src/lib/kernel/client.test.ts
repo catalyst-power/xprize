@@ -106,6 +106,7 @@ describe('fetchKernel', () => {
     expect((opts.headers as Record<string, string>).Authorization).toBe(
       'Bearer token-for-att-scott-456',
     );
+    expect((opts.headers as Record<string, string>)['X-App-DID']).toBe('did:imajin:testapp');
   });
 
   it('caches a separate TokenProvider per distinct attestationId', async () => {
@@ -133,6 +134,24 @@ describe('fetchKernel', () => {
       'APP_DID and APP_PRIVATE_KEY',
     );
   });
+
+  it('attaches X-App-DID on the 401-retry request too, so dual-guard kernel routes do not reject the retry', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 401, json: () => Promise.resolve({}) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({}) });
+    vi.stubGlobal('fetch', fetchMock);
+    const { fetchKernel } = await import('./client');
+
+    await fetchKernel('/supply/api/lots', undefined, 'att-scott-456');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [, retryOpts] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect((retryOpts.headers as Record<string, string>)['X-App-DID']).toBe('did:imajin:testapp');
+    expect((retryOpts.headers as Record<string, string>).Authorization).toBe(
+      'Bearer token-for-att-scott-456',
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -152,6 +171,7 @@ describe('fetchKernelAsSelf', () => {
     expect((opts.headers as Record<string, string>).Authorization).toBe(
       'Bearer token-for-self',
     );
+    expect((opts.headers as Record<string, string>)['X-App-DID']).toBe('did:imajin:testapp');
   });
 
   it('throws a descriptive error when APP_DID / APP_PRIVATE_KEY env vars are missing', async () => {
@@ -174,5 +194,21 @@ describe('fetchKernelAsSelf', () => {
     const [, secondOpts] = fetchMock.mock.calls[1] as [string, RequestInit];
     expect((firstOpts.headers as Record<string, string>).Authorization).toBe('Bearer token-for-self');
     expect((secondOpts.headers as Record<string, string>).Authorization).toBe('Bearer token-for-self');
+  });
+
+  it('attaches X-App-DID on the 401-retry request too', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 401, json: () => Promise.resolve({}) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({}) });
+    vi.stubGlobal('fetch', fetchMock);
+    const { fetchKernelAsSelf } = await import('./client');
+
+    await fetchKernelAsSelf('/connections/api/connectors/status');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [, retryOpts] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect((retryOpts.headers as Record<string, string>)['X-App-DID']).toBe('did:imajin:testapp');
+    expect((retryOpts.headers as Record<string, string>).Authorization).toBe('Bearer token-for-self');
   });
 });
