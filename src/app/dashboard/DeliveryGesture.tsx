@@ -340,6 +340,16 @@ const ZERO_CANDIDATE_NOTICE =
   "We heard your voice note but couldn't extract details — fill in the fields below.";
 const INVALID_LINES_MESSAGE =
   'Each line needs a product, unit, quantity, and consistent pricing before you can confirm.';
+const MISSING_RECIPIENT_MESSAGE = 'Select a recipient before confirming.';
+
+/**
+ * A delivery receipt is a claim *about* someone — the recipient DID is the
+ * attestation's subject. Without one there is nothing to sign against, so the
+ * confirm gesture stays disabled until a recipient is chosen (xprize#65).
+ */
+export function hasRecipient(header: DeliveryHeaderFields): boolean {
+  return header.recipient.trim() !== '';
+}
 
 type CaptureOutcome =
   | { kind: 'error'; errorMessage: string }
@@ -802,6 +812,14 @@ export function DeliveryGesture({ priorLot, connections = [], activeRecipientDid
     const header = state.header ?? EMPTY_HEADER_FIELDS;
     const lines = state.lines ?? [];
 
+    // A delivery receipt without a subject is unsignable — the attestation's
+    // recipient IS the claim's subject (AGENTS.md §4), so an empty recipient
+    // must never reach the confirm call.
+    if (!hasRecipient(header)) {
+      setState({ phase: 'error', errorMessage: MISSING_RECIPIENT_MESSAGE });
+      return;
+    }
+
     // Freeze qty/unitPrice/total per line, mutually consistent, validated at
     // sign time — the signed payload contains exact resolved numbers, never
     // formulas (AGENTS.md §4: never a signed ambiguity).
@@ -1043,7 +1061,7 @@ export function DeliveryGesture({ priorLot, connections = [], activeRecipientDid
           <button
             type="button"
             onClick={() => void handleConfirm()}
-            disabled={isSubmitting || !allLinesValid}
+            disabled={isSubmitting || !allLinesValid || !hasRecipient(header)}
             className="w-full rounded-lg bg-white px-4 py-2.5 text-sm font-semibold text-black hover:bg-zinc-100 disabled:opacity-50 transition-colors"
           >
             {isSubmitting ? 'Signing…' : 'Confirm delivery'}
