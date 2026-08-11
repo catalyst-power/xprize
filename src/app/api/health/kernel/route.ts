@@ -11,18 +11,19 @@
  * APP_ATTESTATION_ID is NOT used anywhere in the real per-user auth flow —
  * src/lib/kernel/client.ts mints every token from the acting supplier's own
  * session attestation (`SessionUser.attestationId`), never from an env var.
- * (It IS reused elsewhere as a session-less stopgap credential — see the
- * Stripe webhook's settlement read in src/app/api/webhooks/stripe/route.ts —
- * but that is unrelated to any supplier's own connections/lots reads.) Here
- * it remains the one legitimate diagnostic use of APP_ATTESTATION_ID
- * (xprize#36): an *optional* knob that, when set, upgrades this check to the
- * fuller "handshake + resolve userDid" flow. Without it, this previously
- * 503'd as "misconfigured" even when the app's actual required config
- * (APP_DID + APP_PRIVATE_KEY, exactly what fetchKernel/fetchKernelAsSelf
- * need) was perfectly healthy — a false alarm that says nothing about
- * whether any real supplier's own per-session kernel calls (e.g. the
- * Recipient selector's connections:read fetch) are working. It now falls
- * back to a self-authenticated connectivity check instead.
+ * (It was previously reused as a session-less stopgap credential for the
+ * Stripe webhook's settlement read — retired in xprize#68 in favour of the
+ * app's own session-less service credential, `getLotChainAsSelf` /
+ * `fetchKernelAsSelf`.) Here it remains the one legitimate diagnostic use of
+ * APP_ATTESTATION_ID (xprize#36): an *optional* knob that, when set, upgrades
+ * this check to the fuller "handshake + resolve userDid" flow. Without it,
+ * this previously 503'd as "misconfigured" even when the app's actual
+ * required config (APP_DID + APP_PRIVATE_KEY, exactly what
+ * fetchKernel/fetchKernelAsSelf need) was perfectly healthy — a false alarm
+ * that says nothing about whether any real supplier's own per-session
+ * kernel calls (e.g. the Recipient selector's connections:read fetch) are
+ * working. It now falls back to a self-authenticated connectivity check
+ * instead.
  *
  * Required env vars: APP_DID, APP_PRIVATE_KEY.
  * Optional env var: APP_ATTESTATION_ID (enables the userDid-resolving check).

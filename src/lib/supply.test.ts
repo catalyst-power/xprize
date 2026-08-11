@@ -1,12 +1,13 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { collectRecipientDids, declareSupplyLot, confirmDelivery, getLotChain, recentLots } from './supply';
+import { collectRecipientDids, declareSupplyLot, confirmDelivery, getLotChain, getLotChainAsSelf, recentLots } from './supply';
 import type { LotChain, RecentLot } from './supply';
 
-vi.mock('./kernel/client', () => ({ fetchKernel: vi.fn() }));
+vi.mock('./kernel/client', () => ({ fetchKernel: vi.fn(), fetchKernelAsSelf: vi.fn() }));
 
-import { fetchKernel } from './kernel/client';
+import { fetchKernel, fetchKernelAsSelf } from './kernel/client';
 
 const mockFetch = vi.mocked(fetchKernel);
+const mockFetchAsSelf = vi.mocked(fetchKernelAsSelf);
 
 afterEach(() => {
   vi.resetAllMocks();
@@ -382,6 +383,75 @@ describe('getLotChain', () => {
     );
 
     await expect(getLotChain('lot_abc123', 'att-scott-123')).rejects.toThrow(
+      'supply.lot.read failed: 500 Internal Server Error',
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getLotChainAsSelf (xprize#68) — the webhook-triggered read path, using the
+// app's own session-less service credential instead of a borrowed
+// attestation. Mocked at the fetchKernelAsSelf HTTP boundary, same as every
+// other client function in this file.
+// ---------------------------------------------------------------------------
+
+describe('getLotChainAsSelf', () => {
+  it('GETs /supply/api/lot/{correlationId} via fetchKernelAsSelf, never fetchKernel', async () => {
+    mockFetchAsSelf.mockReturnValue(okResponse(LOT_CHAIN_RESPONSE));
+
+    await getLotChainAsSelf('lot_abc123');
+
+    expect(mockFetchAsSelf).toHaveBeenCalledOnce();
+    expect(mockFetch).not.toHaveBeenCalled();
+    const [path, opts] = mockFetchAsSelf.mock.calls[0];
+    expect(path).toBe('/supply/api/lot/lot_abc123');
+    expect(opts?.method).toBe('GET');
+  });
+
+  it('URL-encodes the correlationId in the path', async () => {
+    mockFetchAsSelf.mockReturnValue(okResponse(LOT_CHAIN_RESPONSE));
+
+    await getLotChainAsSelf('lot/with/slashes');
+
+    const [path] = mockFetchAsSelf.mock.calls[0];
+    expect(path).toBe('/supply/api/lot/lot%2Fwith%2Fslashes');
+  });
+
+  it('returns the parsed LotChain on success', async () => {
+    mockFetchAsSelf.mockReturnValue(okResponse(LOT_CHAIN_RESPONSE));
+
+    const result = await getLotChainAsSelf('lot_abc123');
+
+    expect(result.lot.correlationId).toBe('lot_abc123');
+    expect(result.lot.commodity).toBe('eggs');
+    expect(result.stages).toHaveLength(2);
+  });
+
+  it('throws with status + error message on a kernel error response (e.g. out-of-scope service token)', async () => {
+    mockFetchAsSelf.mockReturnValue(errorResponse(403, { error: 'insufficient scope' }));
+
+    await expect(getLotChainAsSelf('lot_abc123')).rejects.toThrow(
+      'supply.lot.read failed: 403',
+    );
+  });
+
+  it('propagates a service-token mint failure (fetchKernelAsSelf rejects before any response exists)', async () => {
+    mockFetchAsSelf.mockRejectedValue(new Error('Token mint failed: 401 Invalid proof-of-possession signature'));
+
+    await expect(getLotChainAsSelf('lot_abc123')).rejects.toThrow('Token mint failed');
+  });
+
+  it('throws with statusText when the error body is not parseable', async () => {
+    mockFetchAsSelf.mockReturnValue(
+      Promise.resolve({
+        ok: false,
+        status: 500,
+        statusText: 'Internal Server Error',
+        json: () => Promise.reject(new Error('not json')),
+      } as Response),
+    );
+
+    await expect(getLotChainAsSelf('lot_abc123')).rejects.toThrow(
       'supply.lot.read failed: 500 Internal Server Error',
     );
   });

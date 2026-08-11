@@ -51,9 +51,8 @@ describe('POST /api/webhooks/stripe — signature verification', () => {
 });
 
 describe('POST /api/webhooks/stripe — checkout.session.completed', () => {
-  it('resolves correlationId from session metadata and settles', async () => {
+  it('resolves correlationId from session metadata and settles via the app-service credential (no attestationId)', async () => {
     vi.stubEnv('STRIPE_WEBHOOK_SECRET', SECRET);
-    vi.stubEnv('APP_ATTESTATION_ID', 'att-app-1');
     vi.stubEnv('PLATFORM_DID', 'did:imajin:platform');
     mockSettle.mockResolvedValue({ state: 'settled' });
 
@@ -62,7 +61,6 @@ describe('POST /api/webhooks/stripe — checkout.session.completed', () => {
     expect(res.status).toBe(200);
     expect(mockSettle).toHaveBeenCalledWith({
       correlationId: 'lot_1',
-      attestationId: 'att-app-1',
       fromDid: 'did:imajin:platform',
     });
   });
@@ -87,14 +85,49 @@ describe('POST /api/webhooks/stripe — checkout.session.completed', () => {
     expect(mockSettle).not.toHaveBeenCalled();
   });
 
-  it('acknowledges (200) even when APP_ATTESTATION_ID/PLATFORM_DID are not configured (logs, does not throw)', async () => {
+  it('acknowledges (200) even when PLATFORM_DID is not configured (logs, does not throw)', async () => {
     vi.stubEnv('STRIPE_WEBHOOK_SECRET', SECRET);
-    vi.stubEnv('APP_ATTESTATION_ID', '');
     vi.stubEnv('PLATFORM_DID', '');
 
     const res = await POST(signedRequest(CHECKOUT_COMPLETED_EVENT));
 
     expect(res.status).toBe(200);
     expect(mockSettle).not.toHaveBeenCalled();
+  });
+
+  it('never reads APP_ATTESTATION_ID — the webhook settles purely via the app-service credential (xprize#68)', async () => {
+    vi.stubEnv('STRIPE_WEBHOOK_SECRET', SECRET);
+    vi.stubEnv('APP_ATTESTATION_ID', '');
+    vi.stubEnv('PLATFORM_DID', 'did:imajin:platform');
+    mockSettle.mockResolvedValue({ state: 'settled' });
+
+    const res = await POST(signedRequest(CHECKOUT_COMPLETED_EVENT));
+
+    expect(res.status).toBe(200);
+    expect(mockSettle).toHaveBeenCalledWith({
+      correlationId: 'lot_1',
+      fromDid: 'did:imajin:platform',
+    });
+  });
+
+  it('acknowledges (200) but logs clearly when the service-token mint / kernel read fails — never silently swallows a settlement failure', async () => {
+    vi.stubEnv('STRIPE_WEBHOOK_SECRET', SECRET);
+    vi.stubEnv('PLATFORM_DID', 'did:imajin:platform');
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockSettle.mockResolvedValue({
+      state: 'error',
+      error: 'Token mint failed: 401 Invalid proof-of-possession signature',
+    });
+
+    const res = await POST(signedRequest(CHECKOUT_COMPLETED_EVENT));
+
+    expect(res.status).toBe(200);
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      '[agrifortress] stripe webhook: settle failed',
+      expect.objectContaining({
+        correlationId: 'lot_1',
+        error: 'Token mint failed: 401 Invalid proof-of-possession signature',
+      }),
+    );
   });
 });
