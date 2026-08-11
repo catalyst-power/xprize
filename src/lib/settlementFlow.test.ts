@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('./supply', () => ({ getLotChain: vi.fn() }));
+vi.mock('./supply', () => ({ getLotChain: vi.fn(), getLotChainAsSelf: vi.fn() }));
 vi.mock('./kernel/attestations', () => ({ isReceiptBilateral: vi.fn() }));
 vi.mock('./kernel/quickbooksInvoice', () => ({ createQuickBooksInvoice: vi.fn() }));
 vi.mock('./kernel/pay', () => ({ createCheckoutSession: vi.fn(), settleFair: vi.fn() }));
 
-import { getLotChain } from './supply';
+import { getLotChain, getLotChainAsSelf } from './supply';
 import { isReceiptBilateral } from './kernel/attestations';
 import { createQuickBooksInvoice } from './kernel/quickbooksInvoice';
 import { createCheckoutSession, settleFair } from './kernel/pay';
@@ -14,6 +14,7 @@ import { __resetSettlementStoreForTests } from './settlementStore';
 import type { LotChain } from './supply';
 
 const mockGetLotChain = vi.mocked(getLotChain);
+const mockGetLotChainAsSelf = vi.mocked(getLotChainAsSelf);
 const mockIsBilateral = vi.mocked(isReceiptBilateral);
 const mockCreateInvoice = vi.mocked(createQuickBooksInvoice);
 const mockCreateCheckout = vi.mocked(createCheckoutSession);
@@ -145,12 +146,23 @@ describe('attemptInvoiceCreation', () => {
 // ---------------------------------------------------------------------------
 
 describe('attemptSettleFromStripe', () => {
-  it('settles once for a bilateral receipt with a valid manifest', async () => {
-    mockGetLotChain.mockResolvedValue(BILATERAL_CHAIN);
+  it('reads the lot via getLotChainAsSelf (the app-service credential), never the borrowed-attestation getLotChain', async () => {
+    mockGetLotChainAsSelf.mockResolvedValue(BILATERAL_CHAIN);
     mockIsBilateral.mockResolvedValue(true);
     mockSettleFair.mockResolvedValue({ settled: true, batchId: 'batch_1', transactions: ['tx_1'], total_amount: 24, recipients: 1, source: 'external' });
 
-    const result = await attemptSettleFromStripe({ correlationId: 'lot_1', attestationId: 'att-scott-123', fromDid: 'did:imajin:platform' });
+    await attemptSettleFromStripe({ correlationId: 'lot_1', fromDid: 'did:imajin:platform' });
+
+    expect(mockGetLotChainAsSelf).toHaveBeenCalledWith('lot_1');
+    expect(mockGetLotChain).not.toHaveBeenCalled();
+  });
+
+  it('settles once for a bilateral receipt with a valid manifest', async () => {
+    mockGetLotChainAsSelf.mockResolvedValue(BILATERAL_CHAIN);
+    mockIsBilateral.mockResolvedValue(true);
+    mockSettleFair.mockResolvedValue({ settled: true, batchId: 'batch_1', transactions: ['tx_1'], total_amount: 24, recipients: 1, source: 'external' });
+
+    const result = await attemptSettleFromStripe({ correlationId: 'lot_1', fromDid: 'did:imajin:platform' });
 
     expect(result.state).toBe('settled');
     expect(mockSettleFair).toHaveBeenCalledWith(
@@ -165,31 +177,31 @@ describe('attemptSettleFromStripe', () => {
   });
 
   it('is a no-op when the receipt is not bilateral (structural gate, never settle a pending claim)', async () => {
-    mockGetLotChain.mockResolvedValue(BILATERAL_CHAIN);
+    mockGetLotChainAsSelf.mockResolvedValue(BILATERAL_CHAIN);
     mockIsBilateral.mockResolvedValue(false);
 
-    const result = await attemptSettleFromStripe({ correlationId: 'lot_1', attestationId: 'att-scott-123', fromDid: 'did:imajin:platform' });
+    const result = await attemptSettleFromStripe({ correlationId: 'lot_1', fromDid: 'did:imajin:platform' });
 
     expect(result.state).toBe('error');
     expect(mockSettleFair).not.toHaveBeenCalled();
   });
 
   it('is idempotent — a duplicate webhook delivery for an already-settled lot does not call settleFair again', async () => {
-    mockGetLotChain.mockResolvedValue(BILATERAL_CHAIN);
+    mockGetLotChainAsSelf.mockResolvedValue(BILATERAL_CHAIN);
     mockIsBilateral.mockResolvedValue(true);
     mockSettleFair.mockResolvedValue({ settled: true, batchId: 'batch_1', transactions: ['tx_1'], total_amount: 24, recipients: 1, source: 'external' });
 
-    await attemptSettleFromStripe({ correlationId: 'lot_1', attestationId: 'att-scott-123', fromDid: 'did:imajin:platform' });
-    const second = await attemptSettleFromStripe({ correlationId: 'lot_1', attestationId: 'att-scott-123', fromDid: 'did:imajin:platform' });
+    await attemptSettleFromStripe({ correlationId: 'lot_1', fromDid: 'did:imajin:platform' });
+    const second = await attemptSettleFromStripe({ correlationId: 'lot_1', fromDid: 'did:imajin:platform' });
 
     expect(mockSettleFair).toHaveBeenCalledOnce();
     expect(second.state).toBe('settled');
   });
 
   it('treats a lot already settled kernel-side (e.g. via the QBO auto-settle path) as settled without calling settleFair', async () => {
-    mockGetLotChain.mockResolvedValue({ ...BILATERAL_CHAIN, lot: { ...BILATERAL_CHAIN.lot!, status: 'settled' } });
+    mockGetLotChainAsSelf.mockResolvedValue({ ...BILATERAL_CHAIN, lot: { ...BILATERAL_CHAIN.lot!, status: 'settled' } });
 
-    const result = await attemptSettleFromStripe({ correlationId: 'lot_1', attestationId: 'att-scott-123', fromDid: 'did:imajin:platform' });
+    const result = await attemptSettleFromStripe({ correlationId: 'lot_1', fromDid: 'did:imajin:platform' });
 
     expect(result.state).toBe('settled');
     expect(mockSettleFair).not.toHaveBeenCalled();
@@ -202,12 +214,35 @@ describe('attemptSettleFromStripe', () => {
         { ...BILATERAL_CHAIN.stages[1], payload: { lines: [{ product: 'eggs', qty: 6, unit: 'dozen', total: 0 }] } },
       ],
     };
-    mockGetLotChain.mockResolvedValue(zeroChain);
+    mockGetLotChainAsSelf.mockResolvedValue(zeroChain);
     mockIsBilateral.mockResolvedValue(true);
 
-    const result = await attemptSettleFromStripe({ correlationId: 'lot_1', attestationId: 'att-scott-123', fromDid: 'did:imajin:platform' });
+    const result = await attemptSettleFromStripe({ correlationId: 'lot_1', fromDid: 'did:imajin:platform' });
 
     expect(result.state).toBe('error');
+    expect(mockSettleFair).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a clear error state (does not throw) when the app-service token mint fails', async () => {
+    mockGetLotChainAsSelf.mockRejectedValue(
+      new Error('Token mint failed: 401 Invalid proof-of-possession signature'),
+    );
+
+    const result = await attemptSettleFromStripe({ correlationId: 'lot_1', fromDid: 'did:imajin:platform' });
+
+    expect(result.state).toBe('error');
+    expect(result.error).toContain('Token mint failed');
+    expect(mockIsBilateral).not.toHaveBeenCalled();
+    expect(mockSettleFair).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a clear error state (does not throw) when the kernel lot read fails (e.g. out-of-scope token)', async () => {
+    mockGetLotChainAsSelf.mockRejectedValue(new Error('supply.lot.read failed: 403 insufficient scope'));
+
+    const result = await attemptSettleFromStripe({ correlationId: 'lot_1', fromDid: 'did:imajin:platform' });
+
+    expect(result.state).toBe('error');
+    expect(result.error).toContain('supply.lot.read failed: 403');
     expect(mockSettleFair).not.toHaveBeenCalled();
   });
 });

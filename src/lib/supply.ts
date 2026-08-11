@@ -13,7 +13,7 @@
  *   publishReceiptStage — received (#1384)
  */
 
-import { fetchKernel } from './kernel/client';
+import { fetchKernel, fetchKernelAsSelf } from './kernel/client';
 
 // ---------------------------------------------------------------------------
 // Request / response types
@@ -96,6 +96,35 @@ export async function getLotChain(
     { method: 'GET' },
     attestationId,
   );
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
+    throw new Error(`supply.lot.read failed: ${res.status} ${data.error ?? res.statusText}`);
+  }
+
+  return res.json() as Promise<LotChain>;
+}
+
+/**
+ * Read the lot chain for a given correlationId, acting as the app's own
+ * session-less service identity rather than any supplier's attestation.
+ *
+ * GET /supply/api/lot/{correlationId} — app-auth-gated (supply:read).
+ * `handleLotGet` only checks the token's `supply:read` scope, never the
+ * caller's identity, so the app's own `app-service+jwt` (minted via
+ * `fetchKernelAsSelf`, sub = azp = APP_DID, no borrowed human attestation)
+ * satisfies it exactly like a user-delegated token would. This is the
+ * webhook-triggered read path (no human session exists to supply an
+ * attestation) — see `attemptSettleFromStripe` in `settlementFlow.ts`.
+ * Kernel-side credential confirmed end-to-end in ima-jin/imajin-ai#1800/#1802.
+ *
+ * Server-side only. Never pass a human attestationId here — use `getLotChain`
+ * for any call made on behalf of a specific signed-in supplier.
+ */
+export async function getLotChainAsSelf(correlationId: string): Promise<LotChain> {
+  const res = await fetchKernelAsSelf(`/supply/api/lot/${encodeURIComponent(correlationId)}`, {
+    method: 'GET',
+  });
 
   if (!res.ok) {
     const data = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };

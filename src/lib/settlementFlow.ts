@@ -5,7 +5,7 @@
  * claim that a receipt is ready.
  */
 
-import { getLotChain, type LotChain } from './supply';
+import { getLotChain, getLotChainAsSelf, type LotChain } from './supply';
 import { isReceiptBilateral } from './kernel/attestations';
 import { createQuickBooksInvoice } from './kernel/quickbooksInvoice';
 import { createCheckoutSession } from './kernel/pay';
@@ -137,17 +137,22 @@ export async function attemptInvoiceCreation(
 // The QBO ingress path settles automatically, kernel-side, once the
 // per-supplier webhook is wired (xprize#35) — see the issue #60 comment for
 // why this app does not also call /pay/api/settle for that path.
+//
+// A webhook delivery has no human session, so there is no per-user
+// attestation to borrow (xprize#68). The lot read here uses
+// `getLotChainAsSelf` — the app's own session-less `app-service+jwt`
+// credential (ima-jin/imajin-ai#1800/#1802) — instead of any supplier's
+// consent attestation.
 // ---------------------------------------------------------------------------
 
 export interface SettleFromStripeParams {
   correlationId: string;
-  attestationId: string;
   /** The payer/org DID — Stripe's checkout session carries no buyer DID by default. */
   fromDid: string;
 }
 
 export async function attemptSettleFromStripe(params: SettleFromStripeParams): Promise<SettlementView> {
-  const { correlationId, attestationId, fromDid } = params;
+  const { correlationId, fromDid } = params;
 
   const existing = getSettlementRecord(correlationId);
   if (existing?.state === 'settled') {
@@ -156,7 +161,7 @@ export async function attemptSettleFromStripe(params: SettleFromStripeParams): P
 
   let chain: LotChain;
   try {
-    chain = await getLotChain(correlationId, attestationId);
+    chain = await getLotChainAsSelf(correlationId);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { state: 'error', error: message };

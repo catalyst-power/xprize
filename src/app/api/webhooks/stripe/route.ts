@@ -75,24 +75,29 @@ export async function POST(request: NextRequest) {
   }
 
   // A webhook delivery has no human session, so there is no per-user
-  // attestationId to pass to fetchKernel(). GET /supply/api/lot/{id} only
-  // checks the token's supply:read scope, not whose attestation minted it
-  // (verified against handleLotGet/getLotChain in the public kernel source),
-  // so any valid attestation works here — reusing APP_ATTESTATION_ID (already
-  // documented in .env.example as a fixed test-fixture identity) is a stopgap,
-  // not a real fix. A durable fix needs a proper session-less service
-  // credential for webhook-triggered kernel reads (documented on xprize#60).
-  const attestationId = process.env.APP_ATTESTATION_ID;
+  // attestation to borrow. attemptSettleFromStripe reads the lot via
+  // getLotChainAsSelf — the app's own session-less app-service credential
+  // (mint via POST /auth/api/apps/token/service, gated by requireAppAuth,
+  // scoped to this app's own supply:read grant) — rather than reusing any
+  // supplier's consent attestation. This retires the former
+  // APP_ATTESTATION_ID stopgap entirely from this path (xprize#68; kernel
+  // side confirmed end-to-end in ima-jin/imajin-ai#1800/#1802).
   const platformDid = process.env.PLATFORM_DID;
-  if (!attestationId || !platformDid) {
-    console.error('[agrifortress] stripe webhook: APP_ATTESTATION_ID/PLATFORM_DID not configured, cannot settle', {
+  if (!platformDid) {
+    console.error('[agrifortress] stripe webhook: PLATFORM_DID not configured, cannot settle', {
       correlationId,
     });
     return NextResponse.json({ received: true });
   }
 
-  const result = await attemptSettleFromStripe({ correlationId, attestationId, fromDid: platformDid });
+  const result = await attemptSettleFromStripe({ correlationId, fromDid: platformDid });
   if (result.state === 'error') {
+    // Covers both a failed service-token mint/kernel read and a failed
+    // settle attempt — attemptSettleFromStripe folds both into this error
+    // state so a settlement failure is never silently swallowed. Stripe's
+    // webhook contract still gets a 200 (see file header): retrying a
+    // permanently-invalid manifest is not something a retry can fix, and
+    // this log line is the durable record of the failure.
     console.error('[agrifortress] stripe webhook: settle failed', { correlationId, error: result.error });
   }
 
