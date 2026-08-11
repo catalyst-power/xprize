@@ -1,6 +1,21 @@
-﻿import { describe, it, expect } from 'vitest';
-import { findReceivedStage, toReceiptPayload } from './DeliveryReceipt';
-import type { LotChain } from '@/lib/supply';
+﻿import { describe, it, expect, vi, afterEach } from 'vitest';
+
+vi.mock('@/lib/supply', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/supply')>('@/lib/supply');
+  return { ...actual, getLotChain: vi.fn() };
+});
+vi.mock('@/lib/settlementFlow', () => ({ attemptInvoiceCreation: vi.fn() }));
+
+import { findReceivedStage, toReceiptPayload, DeliveryReceipt, SettlementSection } from './DeliveryReceipt';
+import { getLotChain, type LotChain } from '@/lib/supply';
+import { attemptInvoiceCreation } from '@/lib/settlementFlow';
+
+const mockGetLotChain = vi.mocked(getLotChain);
+const mockAttemptInvoiceCreation = vi.mocked(attemptInvoiceCreation);
+
+afterEach(() => {
+  vi.resetAllMocks();
+});
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -116,5 +131,70 @@ describe('toReceiptPayload', () => {
     // Quantity must be a number to be the signed asserted value; string is rejected.
     const p = toReceiptPayload({ quantity: 'six' });
     expect(p.quantity).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DeliveryReceipt — settlement wiring (xprize#60)
+// ---------------------------------------------------------------------------
+
+/** Walk a React element tree looking for an element of the given component type. */
+function findElementOfType(node: unknown, type: unknown): { props?: Record<string, unknown> } | undefined {
+  if (node === null || node === undefined || typeof node !== 'object') return undefined;
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const found = findElementOfType(child, type);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  const element = node as { type?: unknown; props?: Record<string, unknown> };
+  if (element.type === type) return element;
+  return findElementOfType(element.props?.['children'], type);
+}
+
+describe('DeliveryReceipt — settlement rendering', () => {
+  it('calls attemptInvoiceCreation with the correlationId and attestationId once a receipt exists', async () => {
+    mockGetLotChain.mockResolvedValue(MOCK_CHAIN);
+    mockAttemptInvoiceCreation.mockResolvedValue({ state: 'pending-invoice' });
+
+    await DeliveryReceipt({ correlationId: 'lot_abc123', attestationId: 'att-1' });
+
+    expect(mockAttemptInvoiceCreation).toHaveBeenCalledWith('lot_abc123', 'att-1');
+  });
+
+  it('renders a SettlementSection with the resolved settlement view', async () => {
+    mockGetLotChain.mockResolvedValue(MOCK_CHAIN);
+    mockAttemptInvoiceCreation.mockResolvedValue({ state: 'awaiting-payment', invoiceId: 'inv_1', checkoutUrl: 'https://checkout.stripe.com/cs_1' });
+
+    const element = await DeliveryReceipt({ correlationId: 'lot_abc123', attestationId: 'att-1' });
+
+    const settlementSection = findElementOfType(element, SettlementSection);
+    expect(settlementSection).toBeDefined();
+    expect(settlementSection?.props?.['settlement']).toEqual({
+      state: 'awaiting-payment',
+      invoiceId: 'inv_1',
+      checkoutUrl: 'https://checkout.stripe.com/cs_1',
+    });
+  });
+
+  it('does not attempt settlement when the receipt is still pending (no received stage)', async () => {
+    mockGetLotChain.mockResolvedValue({ ...MOCK_CHAIN, stages: [DECLARED_STAGE] });
+
+    await DeliveryReceipt({ correlationId: 'lot_abc123', attestationId: 'att-1' });
+
+    expect(mockAttemptInvoiceCreation).not.toHaveBeenCalled();
+  });
+});
+
+describe('SettlementSection', () => {
+  it('renders the settled badge and totalCents for a settled state', () => {
+    const element = SettlementSection({ settlement: { state: 'settled', totalCents: 2400, invoiceId: 'inv_1' } });
+    expect(element).toBeDefined();
+  });
+
+  it('renders an error message for an error state', () => {
+    const element = SettlementSection({ settlement: { state: 'error', error: 'manifest total is zero' } });
+    expect(element).toBeDefined();
   });
 });
