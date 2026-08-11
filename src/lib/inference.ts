@@ -20,18 +20,39 @@
  */
 
 import { fetchKernel } from './kernel/client';
+import type { ConfirmedLine } from './deliveryLines';
 
 // ---------------------------------------------------------------------------
 // Request / response types
 // ---------------------------------------------------------------------------
 
+/** One inferred line item, before it's confirmed/priced (xprize#56). */
+export interface IntentLineMetadata {
+  product?: string;
+  qty?: number;
+  unit?: string;
+  /** Dollars per unit, if Gemini could infer a price. */
+  unitPrice?: number;
+}
+
 export interface IntentMetadata {
+  /**
+   * @deprecated Legacy single-product shape, kept only so an older/simpler
+   * candidate payload still resolves (xprize#56: "a legacy single-product
+   * payload maps to lines[0]"). New candidates use `lines`.
+   */
   product?: string;
   qty?: number;
   unit?: string;
   recipient?: string;
   lot?: string;
   notes?: string;
+  /**
+   * Packing-slip line items (xprize#56) — one gesture like "40 eggs and 20
+   * chickens" produces one card with N lines. When absent, callers fall
+   * back to the legacy top-level `product`/`qty`/`unit` as a single line.
+   */
+  lines?: IntentLineMetadata[];
 }
 
 export interface CandidateIntent {
@@ -88,9 +109,12 @@ export interface ConfirmIntentBody {
   recipient?: string;
   lot?: string;
   notes?: string;
-  product?: string;
-  qty?: number;
-  unit?: string;
+  /**
+   * The frozen, validated packing-slip lines (xprize#56) — qty/unitPrice/total
+   * are mutually consistent numbers, never formulas (AGENTS.md §4: the signed
+   * artifact is deterministic, not a signed ambiguity).
+   */
+  lines: ConfirmedLine[];
 }
 
 // ---------------------------------------------------------------------------

@@ -3,21 +3,14 @@ import {
   buildEditingState,
   getReceiptUrl,
   InferenceDebugPanel,
-  resolveDeliveryFields,
+  resolveHeaderFields,
+  resolveLines,
   resolveRecipientDid,
   resolveCaptureOutcome,
   type CaptureResponse,
 } from './DeliveryGesture';
 import type { RecentLot } from '@/lib/supply';
 import type { ConnectionEntry } from '@/lib/kernel/identity';
-
-// ---------------------------------------------------------------------------
-// resolveDeliveryFields
-//
-// Pure helper that merges Gemini inference metadata with the supplier's most
-// recent lot (a fallback prior). Inference wins when present; priorLot.commodity
-// seeds the product field only when inference returned nothing.
-// ---------------------------------------------------------------------------
 
 const RECENT_LOT: RecentLot = {
   correlationId: 'lot_abc123',
@@ -77,63 +70,88 @@ describe('resolveRecipientDid', () => {
   });
 });
 
-describe('resolveDeliveryFields', () => {
-  it('uses inference product when present (inference wins over prior)', () => {
-    const fields = resolveDeliveryFields({ product: 'apples' }, RECENT_LOT);
-    expect(fields.product).toBe('apples');
+// ---------------------------------------------------------------------------
+// resolveHeaderFields
+// ---------------------------------------------------------------------------
+
+describe('resolveHeaderFields', () => {
+  it('maps lot and notes from inference metadata', () => {
+    const header = resolveHeaderFields({ lot: 'L1', notes: 'fresh' });
+    expect(header.lot).toBe('L1');
+    expect(header.notes).toBe('fresh');
   });
 
-  it('falls back to priorLot.commodity when inference returned no product', () => {
-    const fields = resolveDeliveryFields({}, RECENT_LOT);
-    expect(fields.product).toBe('eggs');
-  });
-
-  it('returns empty string for product when priorLot.commodity is null', () => {
-    const lotNullCommodity: RecentLot = { ...RECENT_LOT, commodity: null };
-    const fields = resolveDeliveryFields({}, lotNullCommodity);
-    expect(fields.product).toBe('');
-  });
-
-  it('returns empty string for product when no inference and no priorLot', () => {
-    const fields = resolveDeliveryFields({}, undefined);
-    expect(fields.product).toBe('');
-  });
-
-  it('converts numeric qty from inference to a string', () => {
-    const fields = resolveDeliveryFields({ qty: 6 }, undefined);
-    expect(fields.qty).toBe('6');
-  });
-
-  it('leaves qty blank when inference returned no qty', () => {
-    const fields = resolveDeliveryFields({}, RECENT_LOT);
-    expect(fields.qty).toBe('');
-  });
-
-  it('maps unit, lot, and notes from inference metadata', () => {
-    const fields = resolveDeliveryFields(
-      { unit: 'dozen', recipient: 'Grace Harbour Farms', lot: 'L1', notes: 'fresh' },
-      undefined,
-    );
-    expect(fields.unit).toBe('dozen');
-    expect(fields.lot).toBe('L1');
-    expect(fields.notes).toBe('fresh');
+  it('defaults lot/notes to empty strings when absent', () => {
+    const header = resolveHeaderFields({});
+    expect(header.lot).toBe('');
+    expect(header.notes).toBe('');
   });
 
   it('resolves an inferred recipient name to its matching connection DID (xprize#55)', () => {
-    const fields = resolveDeliveryFields({ recipient: 'Grace Harbour Farms' }, undefined, CONNECTIONS);
-    expect(fields.recipient).toBe('did:imajin:grace');
-  });
-
-  it('leaves recipient blank when the inferred name matches no connection', () => {
-    const fields = resolveDeliveryFields({ recipient: 'Grace Harbour' }, undefined, CONNECTIONS);
-    expect(fields.recipient).toBe('');
+    const header = resolveHeaderFields({ recipient: 'Grace Harbour Farms' }, CONNECTIONS);
+    expect(header.recipient).toBe('did:imajin:grace');
   });
 
   it('leaves recipient blank when no connections are supplied (defaults to [])', () => {
-    const fields = resolveDeliveryFields({ recipient: 'Grace Harbour Farms' }, undefined);
-    expect(fields.recipient).toBe('');
+    const header = resolveHeaderFields({ recipient: 'Grace Harbour Farms' });
+    expect(header.recipient).toBe('');
   });
 });
+
+// ---------------------------------------------------------------------------
+// resolveLines (xprize#56)
+// ---------------------------------------------------------------------------
+
+describe('resolveLines', () => {
+  it('maps the new lines[] shape to one draft per line', () => {
+    const lines = resolveLines(
+      { lines: [{ product: 'eggs', qty: 40, unit: 'each' }, { product: 'chickens', qty: 20, unit: 'each' }] },
+      undefined,
+    );
+    expect(lines).toHaveLength(2);
+    expect(lines[0].product.label).toBe('eggs');
+    expect(lines[0].qty).toBe('40');
+    expect(lines[1].product.label).toBe('chickens');
+    expect(lines[1].qty).toBe('20');
+  });
+
+  it('derives total for a line when the inferred line carries a unitPrice', () => {
+    const lines = resolveLines({ lines: [{ product: 'eggs', qty: 6, unit: 'dozen', unitPrice: 2 }] }, undefined);
+    expect(lines[0].unitPrice).toBe('2');
+    expect(lines[0].total).toBe('12.00');
+  });
+
+  it('falls back to the legacy single-product shape when lines is absent (backward compatibility)', () => {
+    const lines = resolveLines({ product: 'eggs', qty: 6, unit: 'dozen' }, undefined);
+    expect(lines).toHaveLength(1);
+    expect(lines[0].product.label).toBe('eggs');
+    expect(lines[0].qty).toBe('6');
+    expect(lines[0].unit).toBe('dozen');
+  });
+
+  it('falls back to the legacy shape when lines is an empty array', () => {
+    const lines = resolveLines({ lines: [], product: 'eggs', qty: 6, unit: 'dozen' }, undefined);
+    expect(lines).toHaveLength(1);
+    expect(lines[0].product.label).toBe('eggs');
+  });
+
+  it('seeds the legacy product from priorLot.commodity when inference returned nothing', () => {
+    const lines = resolveLines({}, RECENT_LOT);
+    expect(lines).toHaveLength(1);
+    expect(lines[0].product.label).toBe('eggs');
+  });
+
+  it('starts with a single empty line when there is no inference and no prior lot', () => {
+    const lines = resolveLines({}, undefined);
+    expect(lines).toHaveLength(1);
+    expect(lines[0].product.label).toBe('');
+    expect(lines[0].qty).toBe('');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getReceiptUrl
+// ---------------------------------------------------------------------------
 
 describe('getReceiptUrl', () => {
   it('returns the dashboard receipt URL when externalId is present', () => {
@@ -184,17 +202,37 @@ describe('buildEditingState', () => {
     expect(state.sessionId).toBe('sess-1');
   });
 
-  it('pre-fills fields from the first candidate intent metadata', () => {
+  it('pre-fills a single line from the legacy candidate intent metadata', () => {
     const state = buildEditingState(CAPTURE_RESPONSE, undefined);
-    expect(state.fields?.product).toBe('eggs');
-    expect(state.fields?.qty).toBe('6');
+    expect(state.lines).toHaveLength(1);
+    expect(state.lines[0].product.label).toBe('eggs');
+    expect(state.lines[0].qty).toBe('6');
   });
 
   it('retains captureResponse even when there are no candidate intents (e.g. a failed inference)', () => {
     const failed: CaptureResponse = { sessionId: 'sess-2', assetId: 'asset-2', status: 'failed' };
     const state = buildEditingState(failed, undefined);
     expect(state.captureResponse).toBe(failed);
-    expect(state.fields?.product).toBe('');
+    expect(state.lines).toHaveLength(1);
+    expect(state.lines[0].product.label).toBe('');
+  });
+
+  it('pre-fills multiple lines from a multi-line candidate (xprize#56)', () => {
+    const multiLine: CaptureResponse = {
+      sessionId: 'sess-3',
+      assetId: 'asset-3',
+      status: 'pending_confirm',
+      candidateIntents: [
+        {
+          intentType: 'supply.received',
+          metadata: { lines: [{ product: 'eggs', qty: 40 }, { product: 'chickens', qty: 20 }] },
+        },
+      ],
+    };
+    const state = buildEditingState(multiLine, undefined);
+    expect(state.lines).toHaveLength(2);
+    expect(state.lines[0].product.label).toBe('eggs');
+    expect(state.lines[1].product.label).toBe('chickens');
   });
 });
 
@@ -302,14 +340,14 @@ describe('InferenceDebugPanel', () => {
 describe('resolveCaptureOutcome', () => {
   it('returns an error outcome when status is "failed", using the kernel-provided message', () => {
     const outcome = resolveCaptureOutcome(
-      { sessionId: 's1', status: 'failed', error: 'No candidate intents inferred' },
+      { sessionId: 's1', assetId: 'asset-1', status: 'failed', error: 'No candidate intents inferred' },
       undefined,
     );
     expect(outcome).toEqual({ kind: 'error', errorMessage: 'No candidate intents inferred' });
   });
 
   it('falls back to a default message when status is "failed" but no error string is provided', () => {
-    const outcome = resolveCaptureOutcome({ sessionId: 's1', status: 'failed' }, undefined);
+    const outcome = resolveCaptureOutcome({ sessionId: 's1', assetId: 'asset-1', status: 'failed' }, undefined);
     expect(outcome.kind).toBe('error');
     if (outcome.kind === 'error') {
       expect(outcome.errorMessage).toMatch(/try again or fill in manually/i);
@@ -318,18 +356,19 @@ describe('resolveCaptureOutcome', () => {
 
   it('returns an editing outcome with a notice when candidateIntents is empty and there is no prior lot', () => {
     const outcome = resolveCaptureOutcome(
-      { sessionId: 's1', status: 'ok', candidateIntents: [] },
+      { sessionId: 's1', assetId: 'asset-1', status: 'ok', candidateIntents: [] },
       undefined,
     );
     expect(outcome.kind).toBe('editing');
     if (outcome.kind === 'editing') {
       expect(outcome.notice).toBeDefined();
-      expect(outcome.fields.product).toBe('');
+      expect(outcome.lines).toHaveLength(1);
+      expect(outcome.lines[0].product.label).toBe('');
     }
   });
 
   it('returns an editing outcome with a notice when candidateIntents is absent entirely and there is no prior lot', () => {
-    const outcome = resolveCaptureOutcome({ sessionId: 's1', status: 'ok' }, undefined);
+    const outcome = resolveCaptureOutcome({ sessionId: 's1', assetId: 'asset-1', status: 'ok' }, undefined);
     expect(outcome.kind).toBe('editing');
     if (outcome.kind === 'editing') {
       expect(outcome.notice).toBeDefined();
@@ -338,13 +377,13 @@ describe('resolveCaptureOutcome', () => {
 
   it('does not show a notice when a prior lot can seed the fields, even with no inferred metadata', () => {
     const outcome = resolveCaptureOutcome(
-      { sessionId: 's1', status: 'ok', candidateIntents: [] },
+      { sessionId: 's1', assetId: 'asset-1', status: 'ok', candidateIntents: [] },
       RECENT_LOT,
     );
     expect(outcome.kind).toBe('editing');
     if (outcome.kind === 'editing') {
       expect(outcome.notice).toBeUndefined();
-      expect(outcome.fields.product).toBe('eggs');
+      expect(outcome.lines[0].product.label).toBe('eggs');
     }
   });
 
@@ -352,6 +391,7 @@ describe('resolveCaptureOutcome', () => {
     const outcome = resolveCaptureOutcome(
       {
         sessionId: 's1',
+        assetId: 'asset-1',
         status: 'ok',
         candidateIntents: [
           { intentType: 'delivery', metadata: { product: 'eggs', qty: 6, recipient: 'David' } },
@@ -359,16 +399,20 @@ describe('resolveCaptureOutcome', () => {
       },
       undefined,
     );
-    expect(outcome).toEqual({
-      kind: 'editing',
-      fields: { product: 'eggs', qty: '6', unit: '', recipient: '', lot: '', notes: '' },
-    });
+    expect(outcome.kind).toBe('editing');
+    if (outcome.kind === 'editing') {
+      expect(outcome.notice).toBeUndefined();
+      expect(outcome.header).toEqual({ recipient: '', lot: '', notes: '' });
+      expect(outcome.lines).toHaveLength(1);
+      expect(outcome.lines[0]).toMatchObject({ product: { label: 'eggs' }, qty: '6' });
+    }
   });
 
   it('resolves the inferred recipient name to a connection DID when connections are supplied (xprize#55)', () => {
     const outcome = resolveCaptureOutcome(
       {
         sessionId: 's1',
+        assetId: 'asset-1',
         status: 'ok',
         candidateIntents: [
           { intentType: 'delivery', metadata: { product: 'eggs', qty: 6, recipient: 'David' } },
@@ -379,7 +423,30 @@ describe('resolveCaptureOutcome', () => {
     );
     expect(outcome.kind).toBe('editing');
     if (outcome.kind === 'editing') {
-      expect(outcome.fields.recipient).toBe('did:imajin:david');
+      expect(outcome.header.recipient).toBe('did:imajin:david');
+    }
+  });
+
+  it('produces multiple lines from one gesture producing multiple candidate line items (xprize#56)', () => {
+    const outcome = resolveCaptureOutcome(
+      {
+        sessionId: 's1',
+        assetId: 'asset-1',
+        status: 'ok',
+        candidateIntents: [
+          {
+            intentType: 'supply.received',
+            metadata: { lines: [{ product: 'eggs', qty: 40 }, { product: 'chickens', qty: 20 }] },
+          },
+        ],
+      },
+      undefined,
+    );
+    expect(outcome.kind).toBe('editing');
+    if (outcome.kind === 'editing') {
+      expect(outcome.lines).toHaveLength(2);
+      expect(outcome.lines[0].product.label).toBe('eggs');
+      expect(outcome.lines[1].product.label).toBe('chickens');
     }
   });
 });

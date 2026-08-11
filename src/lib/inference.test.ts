@@ -248,12 +248,27 @@ describe('confirmInference', () => {
     expect(opts?.body).toBeUndefined();
   });
 
-  it('sends the confirmed/edited card as a JSON body when provided (xprize#55)', async () => {
+  it('sends the confirmed/edited card as a JSON body when provided (xprize#55/#56)', async () => {
     mockFetch.mockReturnValue(okResponse(CONFIRM_RESPONSE));
 
-    await confirmInference('sess_abc', 'att-scott-123', { recipient: 'did:imajin:david', lot: 'L1' });
+    const body = {
+      recipient: 'did:imajin:david',
+      lot: 'L1',
+      lines: [
+        {
+          product: { label: 'eggs' },
+          qty: 6,
+          unit: 'dozen',
+          unitPrice: 500000,
+          currency: 'USD',
+          total: 3000,
+          priceBasis: 'per_unit' as const,
+        },
+      ],
+    };
+    await confirmInference('sess_abc', 'att-scott-123', body);
 
     const [, opts] = mockFetch.mock.calls[0];
-    expect(opts?.body).toBe(JSON.stringify({ recipient: 'did:imajin:david', lot: 'L1' }));
+    expect(opts?.body).toBe(JSON.stringify(body));
   });
 });
