@@ -14,6 +14,8 @@
  */
 
 import { getLotChain, type LotChain, type LotChainStage } from '@/lib/supply';
+import { attemptInvoiceCreation } from '@/lib/settlementFlow';
+import type { SettlementView } from '@/lib/settlement';
 
 // ---------------------------------------------------------------------------
 // Pure helpers ΓÇö exported for testing
@@ -74,6 +76,80 @@ function ReceiptError(props: Readonly<{ message: string }>) {
 }
 
 // ---------------------------------------------------------------------------
+// Settlement (xprize#60) — pending-invoice / awaiting-payment / settled / error.
+// Read-only render over `attemptInvoiceCreation`'s result; never asserts a
+// state the kernel didn't actually confirm (real dollars, honest status).
+// ---------------------------------------------------------------------------
+
+const SETTLEMENT_STATE_LABEL: Record<SettlementView['state'], string> = {
+  'pending-invoice': 'Awaiting countersignature',
+  'awaiting-payment': 'Invoice sent — awaiting payment',
+  settled: 'Settled',
+  error: 'Settlement error',
+};
+
+const SETTLEMENT_STATE_CLASSES: Record<SettlementView['state'], string> = {
+  'pending-invoice': 'text-zinc-400 border-zinc-700 bg-zinc-900/40',
+  'awaiting-payment': 'text-amber-300 border-amber-800 bg-amber-950/30',
+  settled: 'text-green-400 border-green-800 bg-green-950/40',
+  error: 'text-red-400 border-red-800 bg-red-950/30',
+};
+
+function formatDollars(cents: number): string {
+  return `$${(cents / 100).toFixed(2)}`;
+}
+
+export function SettlementSection(props: Readonly<{ settlement: SettlementView }>) {
+  const { settlement } = props;
+
+  return (
+    <div className="border-t border-zinc-800 pt-3 space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">
+          Settlement
+        </p>
+        <span
+          className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium border ${SETTLEMENT_STATE_CLASSES[settlement.state]}`}
+        >
+          {SETTLEMENT_STATE_LABEL[settlement.state]}
+        </span>
+      </div>
+
+      {settlement.totalCents !== undefined && (
+        <p className="text-xs text-zinc-300">Total: {formatDollars(settlement.totalCents)}</p>
+      )}
+
+      {settlement.invoiceId !== undefined && (
+        <p className="text-xs text-zinc-500">
+          Invoice <span className="font-mono text-zinc-400">{settlement.invoiceId}</span>
+        </p>
+      )}
+
+      {settlement.checkoutUrl !== undefined && settlement.state === 'awaiting-payment' && (
+        <a
+          href={settlement.checkoutUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-block text-xs text-amber-300 underline hover:text-amber-200"
+        >
+          Pay now (Stripe)
+        </a>
+      )}
+
+      {settlement.state === 'error' && settlement.error !== undefined && (
+        <p className="text-[10px] text-red-400 font-mono break-all">{settlement.error}</p>
+      )}
+
+      {settlement.state === 'pending-invoice' && (
+        <p className="text-[10px] text-zinc-600 italic">
+          Settlement starts once the recipient countersigns this receipt (bilateral).
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -102,6 +178,7 @@ export async function DeliveryReceipt(
   const { lot } = chain;
   const { actorDid, attestationCid, priorCid, createdAt } = receivedStage;
   const p = toReceiptPayload(receivedStage.payload);
+  const settlement = await attemptInvoiceCreation(correlationId, attestationId);
 
   const commodity = p.commodity ?? lot.commodity ?? 'ΓÇö';
   const quantity = p.quantity ?? 'ΓÇö';
@@ -177,6 +254,8 @@ export async function DeliveryReceipt(
           physical-world truth.
         </p>
       </div>
+
+      <SettlementSection settlement={settlement} />
     </section>
   );
 }
