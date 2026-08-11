@@ -134,8 +134,16 @@ export default async function DashboardPage(props: { searchParams: SearchParams 
   // an empty list/selector on any network/auth error rather than failing the whole
   // dashboard.
   const [recentLotsList, connections]: [RecentLot[], ConnectionEntry[]] = await Promise.all([
-    recentLots(user.did, user.attestationId, 5).catch(() => []),
-    getConnections(user.attestationId).catch(() => []),
+    recentLots(user.did, user.attestationId, 5).catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('[dashboard] recentLots fetch failed:', message);
+      return [];
+    }),
+    getConnections(user.attestationId).catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('[dashboard] getConnections fetch failed:', message);
+      return [];
+    }),
   ]);
   const priorLot: RecentLot | undefined = recentLotsList.at(0);
 
