@@ -238,4 +238,22 @@ describe('confirmInference', () => {
       'inference.confirm failed: 404',
     );
   });
+
+  it('sends no body when no confirmed card is provided (backward-compatible)', async () => {
+    mockFetch.mockReturnValue(okResponse(CONFIRM_RESPONSE));
+
+    await confirmInference('sess_abc', 'att-scott-123');
+
+    const [, opts] = mockFetch.mock.calls[0];
+    expect(opts?.body).toBeUndefined();
+  });
+
+  it('sends the confirmed/edited card as a JSON body when provided (xprize#55)', async () => {
+    mockFetch.mockReturnValue(okResponse(CONFIRM_RESPONSE));
+
+    await confirmInference('sess_abc', 'att-scott-123', { recipient: 'did:imajin:david', lot: 'L1' });
+
+    const [, opts] = mockFetch.mock.calls[0];
+    expect(opts?.body).toBe(JSON.stringify({ recipient: 'did:imajin:david', lot: 'L1' }));
+  });
 });

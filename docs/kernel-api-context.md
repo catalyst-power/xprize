@@ -20,7 +20,7 @@ The kernel's `requireAppAuth(request, { scope })` validates these and returns:
 
 That triple is your entire authority. The app never holds user credentials directly.
 
-**Scopes used by AgriFortress:** `supply:read`, `supply:write`, `quickbooks:read`.
+**Scopes used by AgriFortress:** `supply:read`, `supply:write`, `quickbooks:read`, `connections:read`.
 
 ## Auth callback flow (how users log in to the app)
 
@@ -107,6 +107,26 @@ Returns a single lot + its ordered stage history.
 Scope: supply:read
 Response: { lot: {...}, stages: [...] }
 ```
+
+## Trust-graph connections (delivery card Recipient selector, xprize#55)
+
+### GET `/connections/api/connections` — the acting supplier's connections
+
+```
+Headers: X-App-DID, X-App-Authorization
+Scope: connections:read
+Response 200: { connections: [{ did, handle, name, nickname, connectedAt }, ...] }
+```
+
+- Returns the *other* DID in each active connection (the kernel maps `didA`/`didB` onto
+  whichever side is not the caller), enriched with the kernel identity's `handle`/`name`
+  and any `nickname` the caller has assigned. `handle`/`name`/`nickname` may be `null`.
+- Used to populate the delivery card's Recipient field as a native `<select>` (a name
+  can't be typed in and resolved to a DID after the fact — the field can only hold a DID
+  that is actually one of the options), so the signed attestation's recipient/subject is
+  always a real DID. Only the attestation subject can later countersign it via
+  `POST /auth/api/attestations/countersign`.
+- See `src/lib/kernel/identity.ts` and `src/app/dashboard/DeliveryGesture.tsx`.
 
 ## Connector status (app-facing connector surface, #1540)
 

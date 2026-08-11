@@ -64,6 +64,35 @@ export interface InferenceConfirmResponse {
   resolvedAt: string;
 }
 
+/**
+ * The human's confirmed/edited delivery card, sent as the confirm request
+ * body so the signed attestation reflects what Scott actually confirmed —
+ * not just whatever Gemini inferred at capture time (AGENTS.md §4: inference
+ * is a prior, the human is the authority).
+ *
+ * `recipient` must be a DID resolved from the supplier's own trust-graph
+ * connections (xprize#55), never a free-text name — the receiver can only
+ * countersign via `POST /auth/api/attestations/countersign` if the signed
+ * attestation's subject is their own DID.
+ *
+ * NOTE (known kernel limitation, discovered while implementing xprize#55/#56):
+ * as of this writing, the kernel's `POST /api/inference/confirm/:sessionId`
+ * route (ima-jin/imajin-ai apps/kernel/app/api/inference/confirm/[sessionId]/route.ts)
+ * does not read a request body at all — it re-signs whatever `metadata` was
+ * stored on the session at capture time. Sending this body is forward-compatible
+ * (harmless no-op today, ready the day the kernel route is extended to consume
+ * edits) but does NOT yet change what gets signed. Tracked as a follow-up;
+ * see the PR description for xprize#55/#56.
+ */
+export interface ConfirmIntentBody {
+  recipient?: string;
+  lot?: string;
+  notes?: string;
+  product?: string;
+  qty?: number;
+  unit?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Client functions
 // ---------------------------------------------------------------------------
@@ -119,14 +148,18 @@ export async function captureInference(
  *
  * @param sessionId     The `sessionId` returned by `captureInference`.
  * @param attestationId The acting user's own session attestation.
+ * @param body          The human's confirmed/edited delivery card (see
+ *                       `ConfirmIntentBody`). Omitted entirely when there is
+ *                       nothing to send (e.g. tests exercising the bare call).
  */
 export async function confirmInference(
   sessionId: string,
   attestationId: string,
+  body?: ConfirmIntentBody,
 ): Promise<InferenceConfirmResponse> {
   const res = await fetchKernel(
     `/api/inference/confirm/${encodeURIComponent(sessionId)}`,
-    { method: 'POST' },
+    { method: 'POST', ...(body !== undefined ? { body: JSON.stringify(body) } : {}) },
     attestationId,
   );
 

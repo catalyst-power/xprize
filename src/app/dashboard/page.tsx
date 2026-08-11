@@ -22,6 +22,7 @@
 import { redirect } from 'next/navigation';
 import { getSession } from '@/lib/session';
 import { recentLots, type RecentLot } from '@/lib/supply';
+import { getConnections, type ConnectionEntry } from '@/lib/kernel/identity';
 import { ConnectedServicesPanel } from './ConnectedServicesPanel';
 import { DeliveryGesture } from './DeliveryGesture';
 import { DeliveryReceipt } from './DeliveryReceipt';
@@ -127,11 +128,15 @@ export default async function DashboardPage(props: { searchParams: SearchParams 
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? '').replace(/\/$/, '');
   const returnTo = `${appUrl}/dashboard`;
 
-  // Fetch the supplier's most recent lots (supply:read, read-only) once, shared by
-  // both the delivery card pre-fill (most recent lot) and the Recent Deliveries list
-  // below (#49). Failure is non-fatal — the page renders with an empty list on any
-  // network/auth error rather than failing the whole dashboard.
-  const recentLotsList: RecentLot[] = await recentLots(user.did, user.attestationId, 5).catch(() => []);
+  // Fetch the supplier's most recent lots (supply:read, read-only) and trust-graph
+  // connections (connections:read, for the Recipient DID selector, xprize#55) once
+  // up front, in parallel. Failure on either is non-fatal — the page renders with
+  // an empty list/selector on any network/auth error rather than failing the whole
+  // dashboard.
+  const [recentLotsList, connections]: [RecentLot[], ConnectionEntry[]] = await Promise.all([
+    recentLots(user.did, user.attestationId, 5).catch(() => []),
+    getConnections(user.attestationId).catch(() => []),
+  ]);
   const priorLot: RecentLot | undefined = recentLotsList.at(0);
 
   const rawLot = searchParams['lot'];
@@ -171,7 +176,7 @@ export default async function DashboardPage(props: { searchParams: SearchParams 
         {/* Delivery gesture → receipt: gesture signs supply.received; receipt renders from it (#7) */}
         {lotId !== undefined
           ? <DeliveryReceipt correlationId={lotId} attestationId={user.attestationId} />
-          : <DeliveryGesture priorLot={priorLot} />}
+          : <DeliveryGesture priorLot={priorLot} connections={connections} />}
 
         {/* Recent Deliveries — read-only list of the supplier's most recent signed lots (#49) */}
         <RecentDeliveries lots={recentLotsList} />

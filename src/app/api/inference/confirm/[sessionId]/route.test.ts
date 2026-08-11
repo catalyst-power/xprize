@@ -36,10 +36,13 @@ const CONFIRM_RESPONSE = {
   resolvedAt: '2026-07-25T12:00:00Z',
 };
 
-function makeRequest(sessionId: string) {
+function makeRequest(sessionId: string, body?: object) {
   return new NextRequest(
     `http://localhost/api/inference/confirm/${sessionId}`,
-    { method: 'POST' },
+    {
+      method: 'POST',
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    },
   );
 }
 
@@ -87,7 +90,40 @@ describe('POST /api/inference/confirm/[sessionId] — success', () => {
 
     await POST(makeRequest('sess_xyz'), makeParams('sess_xyz'));
 
-    expect(mockConfirm).toHaveBeenCalledWith('sess_xyz', SESSION_USER.attestationId);
+    expect(mockConfirm).toHaveBeenCalledWith('sess_xyz', SESSION_USER.attestationId, undefined);
+  });
+
+  it('calls confirmInference with no body when the request has no body (backward-compatible, pre-xprize#55 callers)', async () => {
+    mockGetSession.mockResolvedValue(SESSION_USER);
+    mockConfirm.mockResolvedValue(CONFIRM_RESPONSE);
+
+    await POST(makeRequest('sess_abc'), makeParams('sess_abc'));
+
+    expect(mockConfirm).toHaveBeenCalledWith('sess_abc', SESSION_USER.attestationId, undefined);
+  });
+
+  it('forwards the confirmed/edited card from the request body (xprize#55/#56)', async () => {
+    mockGetSession.mockResolvedValue(SESSION_USER);
+    mockConfirm.mockResolvedValue(CONFIRM_RESPONSE);
+
+    const body = { recipient: 'did:imajin:david', lot: 'L1', notes: 'left at gate' };
+    await POST(makeRequest('sess_abc', body), makeParams('sess_abc'));
+
+    expect(mockConfirm).toHaveBeenCalledWith('sess_abc', SESSION_USER.attestationId, body);
+  });
+
+  it('returns 400 when the request body is present but not valid JSON', async () => {
+    mockGetSession.mockResolvedValue(SESSION_USER);
+
+    const badRequest = new NextRequest('http://localhost/api/inference/confirm/sess_abc', {
+      method: 'POST',
+      body: '{not json',
+    });
+
+    const res = await POST(badRequest, makeParams('sess_abc'));
+
+    expect(res.status).toBe(400);
+    expect(mockConfirm).not.toHaveBeenCalled();
   });
 });
 

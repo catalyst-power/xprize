@@ -4,10 +4,12 @@ import {
   getReceiptUrl,
   InferenceDebugPanel,
   resolveDeliveryFields,
+  resolveRecipientDid,
   resolveCaptureOutcome,
   type CaptureResponse,
 } from './DeliveryGesture';
 import type { RecentLot } from '@/lib/supply';
+import type { ConnectionEntry } from '@/lib/kernel/identity';
 
 // ---------------------------------------------------------------------------
 // resolveDeliveryFields
@@ -24,6 +26,56 @@ const RECENT_LOT: RecentLot = {
   status: 'received',
   createdAt: '2026-01-01T00:00:00Z',
 };
+
+const CONNECTIONS: ConnectionEntry[] = [
+  { did: 'did:imajin:grace', handle: 'graceharbour', name: 'Grace Harbour Farms', nickname: null, connectedAt: '2026-01-01T00:00:00Z' },
+  { did: 'did:imajin:david', handle: 'david', name: 'David Ko', nickname: 'David', connectedAt: '2026-01-02T00:00:00Z' },
+];
+
+// ---------------------------------------------------------------------------
+// resolveRecipientDid (xprize#55)
+//
+// The Recipient field is a native <select> over trust-graph connections, not
+// free text — it can only hold a DID that is actually one of the options.
+// ---------------------------------------------------------------------------
+
+describe('resolveRecipientDid', () => {
+  it('returns \'\' when the raw recipient is undefined', () => {
+    expect(resolveRecipientDid(undefined, CONNECTIONS)).toBe('');
+  });
+
+  it('returns \'\' when the raw recipient is an empty string', () => {
+    expect(resolveRecipientDid('', CONNECTIONS)).toBe('');
+  });
+
+  it('resolves a name that matches a connection\'s name to that connection\'s DID', () => {
+    expect(resolveRecipientDid('Grace Harbour Farms', CONNECTIONS)).toBe('did:imajin:grace');
+  });
+
+  it('resolves a name that matches a connection\'s nickname (case-insensitive)', () => {
+    expect(resolveRecipientDid('david', CONNECTIONS)).toBe('did:imajin:david');
+  });
+
+  it('resolves a name that matches a connection\'s handle', () => {
+    expect(resolveRecipientDid('graceharbour', CONNECTIONS)).toBe('did:imajin:grace');
+  });
+
+  it('passes through an exact DID that is already one of the connections', () => {
+    expect(resolveRecipientDid('did:imajin:david', CONNECTIONS)).toBe('did:imajin:david');
+  });
+
+  it('returns \'\' for a DID-shaped string that is not in the connections list', () => {
+    expect(resolveRecipientDid('did:imajin:unknown', CONNECTIONS)).toBe('');
+  });
+
+  it('returns \'\' for a name with no matching connection (no free-text fallback, per Ryan\'s correction on #55)', () => {
+    expect(resolveRecipientDid('Someone Else', CONNECTIONS)).toBe('');
+  });
+
+  it('returns \'\' when there are no connections at all', () => {
+    expect(resolveRecipientDid('Grace Harbour Farms', [])).toBe('');
+  });
+});
 
 describe('resolveDeliveryFields', () => {
   it('uses inference product when present (inference wins over prior)', () => {
@@ -57,15 +109,29 @@ describe('resolveDeliveryFields', () => {
     expect(fields.qty).toBe('');
   });
 
-  it('maps unit, recipient, lot, and notes from inference metadata', () => {
+  it('maps unit, lot, and notes from inference metadata', () => {
     const fields = resolveDeliveryFields(
-      { unit: 'dozen', recipient: 'Grace Harbour', lot: 'L1', notes: 'fresh' },
+      { unit: 'dozen', recipient: 'Grace Harbour Farms', lot: 'L1', notes: 'fresh' },
       undefined,
     );
     expect(fields.unit).toBe('dozen');
-    expect(fields.recipient).toBe('Grace Harbour');
     expect(fields.lot).toBe('L1');
     expect(fields.notes).toBe('fresh');
+  });
+
+  it('resolves an inferred recipient name to its matching connection DID (xprize#55)', () => {
+    const fields = resolveDeliveryFields({ recipient: 'Grace Harbour Farms' }, undefined, CONNECTIONS);
+    expect(fields.recipient).toBe('did:imajin:grace');
+  });
+
+  it('leaves recipient blank when the inferred name matches no connection', () => {
+    const fields = resolveDeliveryFields({ recipient: 'Grace Harbour' }, undefined, CONNECTIONS);
+    expect(fields.recipient).toBe('');
+  });
+
+  it('leaves recipient blank when no connections are supplied (defaults to [])', () => {
+    const fields = resolveDeliveryFields({ recipient: 'Grace Harbour Farms' }, undefined);
+    expect(fields.recipient).toBe('');
   });
 });
 
@@ -295,7 +361,25 @@ describe('resolveCaptureOutcome', () => {
     );
     expect(outcome).toEqual({
       kind: 'editing',
-      fields: { product: 'eggs', qty: '6', unit: '', recipient: 'David', lot: '', notes: '' },
+      fields: { product: 'eggs', qty: '6', unit: '', recipient: '', lot: '', notes: '' },
     });
+  });
+
+  it('resolves the inferred recipient name to a connection DID when connections are supplied (xprize#55)', () => {
+    const outcome = resolveCaptureOutcome(
+      {
+        sessionId: 's1',
+        status: 'ok',
+        candidateIntents: [
+          { intentType: 'delivery', metadata: { product: 'eggs', qty: 6, recipient: 'David' } },
+        ],
+      },
+      undefined,
+      CONNECTIONS,
+    );
+    expect(outcome.kind).toBe('editing');
+    if (outcome.kind === 'editing') {
+      expect(outcome.fields.recipient).toBe('did:imajin:david');
+    }
   });
 });

@@ -20,7 +20,13 @@
 
 import { useRef, useState } from 'react';
 import type { RecentLot } from '@/lib/supply';
-import type { CandidateIntent, InferenceCaptureResponse, IntentMetadata } from '@/lib/inference';
+import type {
+  CandidateIntent,
+  ConfirmIntentBody,
+  InferenceCaptureResponse,
+  IntentMetadata,
+} from '@/lib/inference';
+import { connectionLabel, type ConnectionEntry } from '@/lib/kernel/identity';
 
 // ---------------------------------------------------------------------------
 // Types (mirroring kernel spec from issue #5)
@@ -66,9 +72,48 @@ interface DeliveryFields {
   product: string;
   qty: string;
   unit: string;
+  /** The selected connection's DID, or '' when unset — never free text (xprize#55). */
   recipient: string;
   lot: string;
   notes: string;
+}
+
+const EMPTY_DELIVERY_FIELDS: DeliveryFields = {
+  product: '', qty: '', unit: '', recipient: '', lot: '', notes: '',
+};
+
+// ---------------------------------------------------------------------------
+// Recipient DID resolution — exported for testing
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve an inferred recipient string (a free-text name Gemini transcribed,
+ * or already a DID) to one of the acting supplier's trust-graph connections.
+ *
+ * The Recipient field is a native `<select>` over connections (xprize#55,
+ * per Ryan's correction on the issue: a native select is preferred over a
+ * custom listbox) — it can only hold a DID that is actually one of the
+ * options, so an inferred name with no matching connection resolves to ''
+ * (no selection) rather than being kept as free text. The raw inferred
+ * value is never lost — it's still visible in the always-on Inference Debug
+ * panel below (#49).
+ */
+export function resolveRecipientDid(
+  rawRecipient: string | undefined,
+  connections: readonly ConnectionEntry[],
+): string {
+  if (rawRecipient === undefined || rawRecipient === '') return '';
+
+  const byDid = connections.find((connection) => connection.did === rawRecipient);
+  if (byDid !== undefined) return byDid.did;
+
+  const normalized = rawRecipient.toLowerCase();
+  const byLabel = connections.find((connection) =>
+    [connection.nickname, connection.name, connection.handle].some(
+      (label) => label !== null && label.toLowerCase() === normalized,
+    ),
+  );
+  return byLabel?.did ?? '';
 }
 
 // ---------------------------------------------------------------------------
@@ -79,16 +124,21 @@ interface DeliveryFields {
  * Merge Gemini inference metadata with the most recent lot (a prior, never authority).
  * Inference wins when present; `priorLot.commodity` seeds the product field only when
  * inference returned nothing. The human's confirmation is the signing event.
+ *
+ * `connections` resolves the inferred recipient (a name, or already a DID) to one of
+ * the acting supplier's trust-graph connections (xprize#55) — defaults to `[]` so
+ * existing callers that don't yet have connections available still resolve cleanly.
  */
 export function resolveDeliveryFields(
   meta: IntentMetadata,
   priorLot: RecentLot | undefined,
+  connections: readonly ConnectionEntry[] = [],
 ): DeliveryFields {
   return {
     product: meta.product ?? priorLot?.commodity ?? '',
     qty: meta.qty != null ? String(meta.qty) : '',
     unit: meta.unit ?? '',
-    recipient: meta.recipient ?? '',
+    recipient: resolveRecipientDid(meta.recipient, connections),
     lot: meta.lot ?? '',
     notes: meta.notes ?? '',
   };
@@ -114,6 +164,7 @@ type CaptureOutcome =
 export function resolveCaptureOutcome(
   capture: CaptureResponse,
   priorLot: RecentLot | undefined,
+  connections: readonly ConnectionEntry[] = [],
 ): CaptureOutcome {
   if (capture.status === 'failed') {
     return { kind: 'error', errorMessage: capture.error ?? DEFAULT_FAILED_MESSAGE };
@@ -121,7 +172,7 @@ export function resolveCaptureOutcome(
 
   const meta = capture.candidateIntents?.at(0)?.metadata ?? {};
   const hasAnyMeta = Object.values(meta).some((v) => v !== undefined && v !== '' && v !== null);
-  const fields = resolveDeliveryFields(meta, priorLot);
+  const fields = resolveDeliveryFields(meta, priorLot, connections);
 
   if (!hasAnyMeta && priorLot === undefined) {
     return { kind: 'editing', fields, notice: ZERO_CANDIDATE_NOTICE };
@@ -157,25 +208,29 @@ interface GestureState {
 export function buildEditingState(
   capture: CaptureResponse,
   priorLot: RecentLot | undefined,
+  connections: readonly ConnectionEntry[] = [],
 ): GestureState {
   const meta = capture.candidateIntents?.at(0)?.metadata ?? {};
   return {
     phase: 'editing',
     sessionId: capture.sessionId,
-    fields: resolveDeliveryFields(meta, priorLot),
+    fields: resolveDeliveryFields(meta, priorLot, connections),
     captureResponse: capture,
   };
 }
 
 // ---------------------------------------------------------------------------
-// Field order for the delivery card
+// Field order for the delivery card — split around the Recipient selector,
+// which renders as a native <select> rather than a plain <input> (xprize#55)
 // ---------------------------------------------------------------------------
 
-const DELIVERY_FIELDS: ReadonlyArray<[keyof DeliveryFields, string, 'text' | 'number']> = [
+const FIELDS_BEFORE_RECIPIENT: ReadonlyArray<[keyof DeliveryFields, string, 'text' | 'number']> = [
   ['product', 'Product', 'text'],
   ['qty', 'Quantity', 'number'],
   ['unit', 'Unit', 'text'],
-  ['recipient', 'Recipient', 'text'],
+];
+
+const FIELDS_AFTER_RECIPIENT: ReadonlyArray<[keyof DeliveryFields, string, 'text' | 'number']> = [
   ['lot', 'Lot', 'text'],
   ['notes', 'Notes', 'text'],
 ];
@@ -247,14 +302,57 @@ export function InferenceDebugPanel(
 }
 
 // ---------------------------------------------------------------------------
+// Recipient selector — native <select> over trust-graph connections
+// (xprize#55). Per Ryan's correction on the issue, a native select is
+// preferred over a custom listbox/combobox. Dark-mode popup styling is
+// tracked separately (ima-jin/imajin-ai#1781) — not touched here.
+// ---------------------------------------------------------------------------
+
+function RecipientSelect(
+  props: Readonly<{
+    value: string;
+    connections: readonly ConnectionEntry[];
+    disabled: boolean;
+    onChange: (did: string) => void;
+  }>,
+) {
+  const { value, connections, disabled, onChange } = props;
+
+  if (connections.length === 0) {
+    return (
+      <p className="text-xs text-zinc-500 italic rounded-lg border border-zinc-800 bg-zinc-800/50 px-3 py-2">
+        No connections yet — add a trust-graph connection to choose a recipient.
+      </p>
+    );
+  }
+
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      disabled={disabled}
+      className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white focus:border-zinc-500 focus:outline-none disabled:opacity-50"
+    >
+      <option value="">Select recipient…</option>
+      {connections.map((connection) => (
+        <option key={connection.did} value={connection.did}>
+          {connectionLabel(connection)}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
 interface DeliveryGestureProps {
   readonly priorLot?: RecentLot;
+  readonly connections?: readonly ConnectionEntry[];
 }
 
-export function DeliveryGesture({ priorLot }: DeliveryGestureProps) {
+export function DeliveryGesture({ priorLot, connections = [] }: DeliveryGestureProps) {
   const [state, setState] = useState<GestureState>({ phase: 'idle' });
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -285,7 +383,7 @@ export function DeliveryGesture({ priorLot }: DeliveryGestureProps) {
       return;
     }
 
-    const outcome = resolveCaptureOutcome(capture, priorLot);
+    const outcome = resolveCaptureOutcome(capture, priorLot, connections);
     if (outcome.kind === 'error') {
       setState({ phase: 'error', errorMessage: outcome.errorMessage });
       return;
@@ -351,14 +449,29 @@ export function DeliveryGesture({ priorLot }: DeliveryGestureProps) {
   async function handleConfirm(): Promise<void> {
     if (state.phase !== 'editing' || state.sessionId === undefined) return;
     const { sessionId } = state;
+    const fields = state.fields ?? EMPTY_DELIVERY_FIELDS;
 
     setState({ ...state, phase: 'submitting' });
+
+    const qtyNumber = Number(fields.qty);
+    const confirmedCard: ConfirmIntentBody = {
+      ...(fields.recipient !== '' ? { recipient: fields.recipient } : {}),
+      ...(fields.lot !== '' ? { lot: fields.lot } : {}),
+      ...(fields.notes !== '' ? { notes: fields.notes } : {}),
+      ...(fields.product !== '' ? { product: fields.product } : {}),
+      ...(fields.qty !== '' && Number.isFinite(qtyNumber) ? { qty: qtyNumber } : {}),
+      ...(fields.unit !== '' ? { unit: fields.unit } : {}),
+    };
 
     let confirm: ConfirmResponse;
     try {
       const res = await fetch(
         `/api/inference/confirm/${encodeURIComponent(sessionId)}`,
-        { method: 'POST' },
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(confirmedCard),
+        },
       );
       const data = await res.json() as ConfirmResponse | { error?: string };
       if (!res.ok) {
@@ -429,9 +542,7 @@ export function DeliveryGesture({ priorLot }: DeliveryGestureProps) {
 
   if (state.phase === 'editing' || state.phase === 'submitting') {
     const isSubmitting = state.phase === 'submitting';
-    const fields = state.fields ?? {
-      product: '', qty: '', unit: '', recipient: '', lot: '', notes: '',
-    };
+    const fields = state.fields ?? EMPTY_DELIVERY_FIELDS;
 
     return (
       <div className="space-y-4">
@@ -450,7 +561,30 @@ export function DeliveryGesture({ priorLot }: DeliveryGestureProps) {
           )}
 
           <div className="space-y-3">
-            {DELIVERY_FIELDS.map(([key, label, inputType]) => (
+            {FIELDS_BEFORE_RECIPIENT.map(([key, label, inputType]) => (
+              <div key={key} className="space-y-1">
+                <label className="text-xs text-zinc-400">{label}</label>
+                <input
+                  type={inputType}
+                  value={fields[key]}
+                  onChange={(e) => updateField(key, e.target.value)}
+                  disabled={isSubmitting}
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white placeholder:text-zinc-600 focus:border-zinc-500 focus:outline-none disabled:opacity-50"
+                />
+              </div>
+            ))}
+
+            <div className="space-y-1">
+              <label className="text-xs text-zinc-400">Recipient</label>
+              <RecipientSelect
+                value={fields.recipient}
+                connections={connections}
+                disabled={isSubmitting}
+                onChange={(did) => updateField('recipient', did)}
+              />
+            </div>
+
+            {FIELDS_AFTER_RECIPIENT.map(([key, label, inputType]) => (
               <div key={key} className="space-y-1">
                 <label className="text-xs text-zinc-400">{label}</label>
                 <input

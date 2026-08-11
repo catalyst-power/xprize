@@ -119,7 +119,7 @@ supplier, never **from** them. **Moat = legitimacy, not lock-in.**
 - **What it is:** *farm-to-farm-to-table supply-chain registry* — a thin render + gesture UX over the supplier's signed
   supply records. Composes the Imajin `supply` primitive; owns nothing authoritative.
 - **App DID:** _<did:imajin:… — from app registration (xprize #3); fill when minted>_
-- **Scopes:** `supply:read`, `supply:write`
+- **Scopes:** `supply:read`, `supply:write`, `connections:read` (trust-graph connections for the delivery card's Recipient DID selector, xprize#55)
 - **Domain:** deployed at **`integrity.imajin.ai`** (our infra). AgriFortress branding + pointing Catalyst's domain at
   it = a later brand/DNS layer, not a rebuild.
 - **The real-world loop it instruments (instrument, don't invent):**
