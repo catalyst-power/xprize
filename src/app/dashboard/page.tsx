@@ -21,7 +21,7 @@
 
 import { redirect } from 'next/navigation';
 import { getSession } from '@/lib/session';
-import { recentLots, type RecentLot } from '@/lib/supply';
+import { recentLots, getLotChain, collectRecipientDids, type LotChain, type RecentLot } from '@/lib/supply';
 import { getConnections, type ConnectionEntry } from '@/lib/kernel/identity';
 import { ConnectedServicesPanel } from './ConnectedServicesPanel';
 import { DeliveryGesture } from './DeliveryGesture';
@@ -139,6 +139,20 @@ export default async function DashboardPage(props: { searchParams: SearchParams 
   ]);
   const priorLot: RecentLot | undefined = recentLotsList.at(0);
 
+  // xprize#59: best-effort "active on AgriFortress" signal for the recipient
+  // selector, scanned from the same bounded set of recent lot chains already
+  // fetched above for Recent Deliveries — see `collectRecipientDids` (src/lib/supply.ts)
+  // for why this is a heuristic, not an authoritative query. Any lot chain
+  // fetch failure is non-fatal (just omitted from the scan, never a page error).
+  const lotChains = await Promise.all(
+    recentLotsList.map((lot) =>
+      getLotChain(lot.correlationId, user.attestationId).catch((): LotChain | null => null),
+    ),
+  );
+  const activeRecipientDids = [...collectRecipientDids(
+    lotChains.filter((chain): chain is LotChain => chain !== null),
+  )];
+
   const rawLot = searchParams['lot'];
   const lotId = typeof rawLot === 'string' ? rawLot : undefined;
   const connectError = resolveConnectError(searchParams);
@@ -176,7 +190,13 @@ export default async function DashboardPage(props: { searchParams: SearchParams 
         {/* Delivery gesture → receipt: gesture signs supply.received; receipt renders from it (#7) */}
         {lotId !== undefined
           ? <DeliveryReceipt correlationId={lotId} attestationId={user.attestationId} />
-          : <DeliveryGesture priorLot={priorLot} connections={connections} />}
+          : (
+            <DeliveryGesture
+              priorLot={priorLot}
+              connections={connections}
+              activeRecipientDids={activeRecipientDids}
+            />
+          )}
 
         {/* Recent Deliveries — read-only list of the supplier's most recent signed lots (#49) */}
         <RecentDeliveries lots={recentLotsList} />

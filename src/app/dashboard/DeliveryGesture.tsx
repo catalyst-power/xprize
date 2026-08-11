@@ -144,6 +144,57 @@ export function resolveHeaderFields(
 }
 
 // ---------------------------------------------------------------------------
+// Recipient activity / invite messaging (xprize#59) — exported for testing
+//
+// The recipient selector is now populated from the supplier's full
+// trust-graph connections, including contacts who've never been active on
+// AgriFortress before (xprize#59 requirement #1). `activeRecipientDids`
+// (best-effort, see `collectRecipientDids` in src/lib/supply.ts) tells us
+// which ones have. Naming an inactive one is still allowed — the delivery
+// attestation is created pending with them as subject exactly like an
+// active recipient (the claimable-stub move the issue describes) — but the
+// UI must say so, and confirm must additionally send them an invite.
+// ---------------------------------------------------------------------------
+
+/** True when the selected recipient has never been an AgriFortress recipient before (per the best-effort heuristic). */
+export function isRecipientPendingInvite(
+  recipientDid: string,
+  activeRecipientDids: ReadonlySet<string>,
+): boolean {
+  return recipientDid !== '' && !activeRecipientDids.has(recipientDid);
+}
+
+const INVITE_WILL_BE_SENT_MESSAGE =
+  "This recipient hasn't used AgriFortress yet \u2014 confirming will send them an invite to countersign this delivery.";
+
+/** "Invite will be sent" notice for the currently selected recipient, or undefined when none is needed. */
+export function inviteNoticeForRecipient(
+  recipientDid: string,
+  activeRecipientDids: ReadonlySet<string>,
+): string | undefined {
+  return isRecipientPendingInvite(recipientDid, activeRecipientDids) ? INVITE_WILL_BE_SENT_MESSAGE : undefined;
+}
+
+const NO_ACTIVE_CONNECTIONS_NOTICE =
+  'None of your Imajin connections have used AgriFortress yet \u2014 selecting one will send them an invite.';
+
+/**
+ * Distinguishes the two empty states the issue calls out: "no Imajin
+ * connections at all" (handled separately by `RecipientSelect`'s own empty
+ * state) vs "connections exist but none are active here" (this notice).
+ * Returns undefined when there are no connections at all, or when at least
+ * one connection is already active.
+ */
+export function noActiveConnectionsNotice(
+  connections: readonly ConnectionEntry[],
+  activeRecipientDids: ReadonlySet<string>,
+): string | undefined {
+  if (connections.length === 0) return undefined;
+  const anyActive = connections.some((connection) => activeRecipientDids.has(connection.did));
+  return anyActive ? undefined : NO_ACTIVE_CONNECTIONS_NOTICE;
+}
+
+// ---------------------------------------------------------------------------
 // Line items — exported for testing
 // ---------------------------------------------------------------------------
 
@@ -454,21 +505,30 @@ export function InferenceDebugPanel(
 }
 
 // ---------------------------------------------------------------------------
-// Recipient selector — native <select> over trust-graph connections
-// (xprize#55). Per Ryan's correction on the issue, a native select is
-// preferred over a custom listbox/combobox. Dark-mode popup styling is
-// tracked separately (ima-jin/imajin-ai#1781) — not touched here.
+// Recipient selector — native <select> over the supplier's full trust-graph
+// connections (xprize#55, extended by xprize#59 to include contacts who've
+// never been active on AgriFortress before). Per Ryan's correction on #55,
+// a native select is preferred over a custom listbox/combobox — kept native
+// here too (xprize#59 notes: grey via a label suffix + a scoped `<option>`
+// text color, not a custom component). Dark-mode popup styling is tracked
+// separately (ima-jin/imajin-ai#1781) — not touched here; the inline color
+// below only dims text within the native popup and doesn't touch any global
+// styling.
 // ---------------------------------------------------------------------------
+
+const INACTIVE_OPTION_SUFFIX = ' — invite required';
+const INACTIVE_OPTION_COLOR = '#71717a'; // zinc-500, matching the app's existing dim-text palette
 
 function RecipientSelect(
   props: Readonly<{
     value: string;
     connections: readonly ConnectionEntry[];
+    activeRecipientDids: ReadonlySet<string>;
     disabled: boolean;
     onChange: (did: string) => void;
   }>,
 ) {
-  const { value, connections, disabled, onChange } = props;
+  const { value, connections, activeRecipientDids, disabled, onChange } = props;
 
   if (connections.length === 0) {
     return (
@@ -486,11 +546,18 @@ function RecipientSelect(
       className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white focus:border-zinc-500 focus:outline-none disabled:opacity-50"
     >
       <option value="">Select recipient…</option>
-      {connections.map((connection) => (
-        <option key={connection.did} value={connection.did}>
-          {connectionLabel(connection)}
-        </option>
-      ))}
+      {connections.map((connection) => {
+        const isActive = activeRecipientDids.has(connection.did);
+        return (
+          <option
+            key={connection.did}
+            value={connection.did}
+            style={isActive ? undefined : { color: INACTIVE_OPTION_COLOR }}
+          >
+            {connectionLabel(connection)}{isActive ? '' : INACTIVE_OPTION_SUFFIX}
+          </option>
+        );
+      })}
     </select>
   );
 }
@@ -600,10 +667,13 @@ function DeliveryLineRow(
 interface DeliveryGestureProps {
   readonly priorLot?: RecentLot;
   readonly connections?: readonly ConnectionEntry[];
+  /** DIDs the best-effort heuristic (see `collectRecipientDids`, src/lib/supply.ts) found as prior AgriFortress recipients (xprize#59). */
+  readonly activeRecipientDids?: readonly string[];
 }
 
-export function DeliveryGesture({ priorLot, connections = [] }: DeliveryGestureProps) {
+export function DeliveryGesture({ priorLot, connections = [], activeRecipientDids = [] }: DeliveryGestureProps) {
   const [state, setState] = useState<GestureState>({ phase: 'idle' });
+  const activeRecipientDidSet = new Set(activeRecipientDids);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const nextLineKeyRef = useRef(0);
@@ -780,6 +850,27 @@ export function DeliveryGesture({ priorLot, connections = [] }: DeliveryGestureP
       return;
     }
 
+    // The delivery attestation is already signed at this point (pending, with
+    // the chosen recipient as subject — same behavior whether or not they've
+    // been active on AgriFortress before, xprize#59's claimable-stub move).
+    // Sending the invite is best-effort and secondary: a failed invite send
+    // must never look like a failed delivery (claim boundary, AGENTS.md §4),
+    // so errors here are swallowed rather than surfaced as the confirm outcome.
+    if (isRecipientPendingInvite(header.recipient, activeRecipientDidSet)) {
+      const recipientConnection = connections.find((c) => c.did === header.recipient);
+      try {
+        await fetch('/api/connections/invite', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            recipientLabel: recipientConnection !== undefined ? connectionLabel(recipientConnection) : undefined,
+          }),
+        });
+      } catch {
+        // Best-effort — see comment above.
+      }
+    }
+
     const receiptUrl = getReceiptUrl(confirm.externalId);
     if (receiptUrl !== null) {
       globalThis.location.assign(receiptUrl);
@@ -866,9 +957,23 @@ export function DeliveryGesture({ priorLot, connections = [] }: DeliveryGestureP
               <RecipientSelect
                 value={header.recipient}
                 connections={connections}
+                activeRecipientDids={activeRecipientDidSet}
                 disabled={isSubmitting}
                 onChange={(did) => updateHeaderField('recipient', did)}
               />
+              {noActiveConnectionsNotice(connections, activeRecipientDidSet) !== undefined && (
+                <p className="text-xs text-zinc-500">
+                  {noActiveConnectionsNotice(connections, activeRecipientDidSet)}
+                </p>
+              )}
+              {inviteNoticeForRecipient(header.recipient, activeRecipientDidSet) !== undefined && (
+                <p
+                  data-testid="invite-notice"
+                  className="text-xs text-amber-300 bg-amber-950/30 border border-amber-800 rounded-lg px-3 py-2"
+                >
+                  {inviteNoticeForRecipient(header.recipient, activeRecipientDidSet)}
+                </p>
+              )}
             </div>
             <div className="space-y-1">
               <label className="text-xs text-zinc-400">Lot</label>

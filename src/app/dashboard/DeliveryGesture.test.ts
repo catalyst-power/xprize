@@ -5,6 +5,9 @@ import {
   extractPriceFromNotes,
   getReceiptUrl,
   InferenceDebugPanel,
+  inviteNoticeForRecipient,
+  isRecipientPendingInvite,
+  noActiveConnectionsNotice,
   resolveHeaderFields,
   resolveLines,
   resolveRecipientDid,
@@ -260,6 +263,60 @@ describe('applyNotesPriceFallback', () => {
     expect(result.lines[0].total).toBe('');
     expect(result.lines[1].total).toBe('');
     expect(result.header.notes).toBe('price: $5');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isRecipientPendingInvite / inviteNoticeForRecipient / noActiveConnectionsNotice (xprize#59)
+// ---------------------------------------------------------------------------
+
+describe('isRecipientPendingInvite', () => {
+  it('is false when no recipient is selected', () => {
+    expect(isRecipientPendingInvite('', new Set(['did:imajin:david']))).toBe(false);
+  });
+
+  it('is false when the selected recipient is in the active set', () => {
+    expect(isRecipientPendingInvite('did:imajin:david', new Set(['did:imajin:david']))).toBe(false);
+  });
+
+  it('is true when the selected recipient is not in the active set (never been active on AgriFortress)', () => {
+    expect(isRecipientPendingInvite('did:imajin:grace', new Set(['did:imajin:david']))).toBe(true);
+  });
+
+  it('is true when the active set is empty', () => {
+    expect(isRecipientPendingInvite('did:imajin:grace', new Set())).toBe(true);
+  });
+});
+
+describe('inviteNoticeForRecipient', () => {
+  it('returns undefined when no recipient is selected', () => {
+    expect(inviteNoticeForRecipient('', new Set())).toBeUndefined();
+  });
+
+  it('returns undefined when the recipient is already active', () => {
+    expect(inviteNoticeForRecipient('did:imajin:david', new Set(['did:imajin:david']))).toBeUndefined();
+  });
+
+  it('returns an "invite will be sent" message when the recipient has never been active', () => {
+    const notice = inviteNoticeForRecipient('did:imajin:grace', new Set());
+    expect(notice).toBeDefined();
+    expect(notice).toMatch(/invite/i);
+  });
+});
+
+describe('noActiveConnectionsNotice', () => {
+  it('returns undefined when there are no connections at all (the dedicated empty state handles that case)', () => {
+    expect(noActiveConnectionsNotice([], new Set())).toBeUndefined();
+  });
+
+  it('returns undefined when at least one connection is active', () => {
+    expect(noActiveConnectionsNotice(CONNECTIONS, new Set(['did:imajin:david']))).toBeUndefined();
+  });
+
+  it('returns a notice when connections exist but none are active (distinguishes from "no connections at all")', () => {
+    const notice = noActiveConnectionsNotice(CONNECTIONS, new Set());
+    expect(notice).toBeDefined();
+    expect(notice).toMatch(/invite|active/i);
   });
 });
 
