@@ -6,6 +6,8 @@ vi.mock('@/lib/session', () => ({
 
 vi.mock('@/lib/supply', () => ({
   recentLots: vi.fn(),
+  getLotChain: vi.fn(),
+  collectRecipientDids: vi.fn(),
 }));
 
 vi.mock('@/lib/kernel/identity', () => ({
@@ -13,7 +15,7 @@ vi.mock('@/lib/kernel/identity', () => ({
 }));
 
 import { getSession } from '@/lib/session';
-import { recentLots, type RecentLot } from '@/lib/supply';
+import { recentLots, getLotChain, collectRecipientDids, type LotChain, type RecentLot } from '@/lib/supply';
 import { getConnections, type ConnectionEntry } from '@/lib/kernel/identity';
 import DashboardPage, {
   ConnectErrorBanner,
@@ -26,6 +28,17 @@ import { DeliveryGesture } from './DeliveryGesture';
 const mockGetSession = vi.mocked(getSession);
 const mockRecentLots = vi.mocked(recentLots);
 const mockGetConnections = vi.mocked(getConnections);
+const mockGetLotChain = vi.mocked(getLotChain);
+const mockCollectRecipientDids = vi.mocked(collectRecipientDids);
+
+// xprize#59 wiring defaults — most existing tests below don't exercise the
+// activity heuristic itself (that's covered in supply.test.ts), so give
+// every test a working default and only override it where relevant.
+mockGetLotChain.mockResolvedValue({
+  lot: { correlationId: 'lot_x', originatingDid: 'did:imajin:scott', commodity: null, status: 'received', createdAt: '2026-01-01T00:00:00Z' },
+  stages: [],
+});
+mockCollectRecipientDids.mockReturnValue(new Set());
 
 const SESSION_USER = {
   did: 'did:imajin:scott',
@@ -183,6 +196,52 @@ describe('DashboardPage', () => {
 
     const gesture = findElementOfType(element, DeliveryGesture);
     expect(gesture?.props?.['connections']).toEqual([]);
+  });
+
+  // -------------------------------------------------------------------------
+  // activeRecipientDids wiring (xprize#59) — the heuristic itself
+  // (collectRecipientDids) is unit-tested in supply.test.ts; here we only
+  // check the page fetches each recent lot's chain and threads the result
+  // through to DeliveryGesture.
+  // -------------------------------------------------------------------------
+
+  it("fetches each recent lot's chain and passes collectRecipientDids' result to DeliveryGesture", async () => {
+    const lots: RecentLot[] = [
+      { correlationId: 'lot_1', originatingDid: SESSION_USER.did, commodity: 'eggs', status: 'received', createdAt: '2026-01-01T00:00:00Z' },
+    ];
+    const chain: LotChain = {
+      lot: { correlationId: 'lot_1', originatingDid: SESSION_USER.did, commodity: 'eggs', status: 'received', createdAt: '2026-01-01T00:00:00Z' },
+      stages: [],
+    };
+    mockGetSession.mockResolvedValue(SESSION_USER);
+    mockRecentLots.mockResolvedValue(lots);
+    mockGetConnections.mockResolvedValue(CONNECTIONS);
+    mockGetLotChain.mockResolvedValue(chain);
+    mockCollectRecipientDids.mockReturnValue(new Set(['did:imajin:david']));
+
+    const element = await DashboardPage({ searchParams: Promise.resolve({}) });
+
+    expect(mockGetLotChain).toHaveBeenCalledWith('lot_1', SESSION_USER.attestationId);
+    expect(mockCollectRecipientDids).toHaveBeenCalledWith([chain]);
+    const gesture = findElementOfType(element, DeliveryGesture);
+    expect(gesture?.props?.['activeRecipientDids']).toEqual(['did:imajin:david']);
+  });
+
+  it('omits a lot chain from the scan (non-fatal) when getLotChain fails for that lot', async () => {
+    const lots: RecentLot[] = [
+      { correlationId: 'lot_1', originatingDid: SESSION_USER.did, commodity: 'eggs', status: 'received', createdAt: '2026-01-01T00:00:00Z' },
+    ];
+    mockGetSession.mockResolvedValue(SESSION_USER);
+    mockRecentLots.mockResolvedValue(lots);
+    mockGetConnections.mockResolvedValue([]);
+    mockGetLotChain.mockRejectedValue(new Error('supply.lot.read failed: 500 Internal Server Error'));
+    mockCollectRecipientDids.mockReturnValue(new Set());
+
+    const element = await DashboardPage({ searchParams: Promise.resolve({}) });
+
+    expect(mockCollectRecipientDids).toHaveBeenCalledWith([]);
+    const gesture = findElementOfType(element, DeliveryGesture);
+    expect(gesture?.props?.['activeRecipientDids']).toEqual([]);
   });
 });
 

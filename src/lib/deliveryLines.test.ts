@@ -324,4 +324,36 @@ describe('legacyFieldsToLine', () => {
     const line = legacyFieldsToLine({ qty: 6, unit: 'dozen' });
     expect(line.product).toEqual({ label: '' });
   });
+
+  // -------------------------------------------------------------------------
+  // Structured total/priceBasis mapping (xprize#58) — forward-compat for
+  // when the kernel-side inference vocabulary is taught to extract these
+  // fields directly instead of shunting price into notes.
+  // -------------------------------------------------------------------------
+
+  it('maps a lump-sum "total" field to the line: "12 eggs for $5" -> total $5.00 (manifest), priceBasis total', () => {
+    const line = legacyFieldsToLine({ product: 'eggs', qty: 12, unit: 'units', total: 5 });
+    expect(parseCents(line.total)).toBe(500); // -> manifest shows $5.00
+    expect(line.priceBasis).toBe('total');
+    expect(line.unitPrice).toBe('0.4167'); // derived, display-only
+  });
+
+  it('maps a "unitPrice" field to the line: "12 eggs at $0.50" -> unitPrice $0.50, total $6.00, priceBasis per_unit', () => {
+    const line = legacyFieldsToLine({ product: 'eggs', qty: 12, unit: 'units', unitPrice: 0.5 });
+    expect(parseUnitPriceScaled(line.unitPrice)).toBe(50 * UNIT_PRICE_SCALE);
+    expect(line.total).toBe('6.00');
+    expect(line.priceBasis).toBe('per_unit');
+  });
+
+  it('prefers an explicit priceBasis to pick between total and unitPrice when both are present', () => {
+    const line = legacyFieldsToLine({ product: 'eggs', qty: 12, unit: 'units', unitPrice: 0.5, total: 5, priceBasis: 'per_unit' });
+    expect(line.priceBasis).toBe('per_unit');
+    expect(parseUnitPriceScaled(line.unitPrice)).toBe(50 * UNIT_PRICE_SCALE);
+  });
+
+  it('leaves money fields blank and notes untouched when the gesture has no price at all (regression)', () => {
+    const line = legacyFieldsToLine({ product: 'eggs', qty: 12, unit: 'units' });
+    expect(line.unitPrice).toBe('');
+    expect(line.total).toBe('');
+  });
 });

@@ -286,13 +286,28 @@ export function freezeLine(line: DeliveryLineDraft): ConfirmedLine | null {
 // ---------------------------------------------------------------------------
 
 /**
- * Map a legacy single-product inference (`{product, qty, unit, unitPrice?}`)
- * to a one-line draft. Used when the kernel's candidate metadata hasn't yet
- * grown to the `{lines: [...]}` shape (xprize#56: "keep backward
- * compatibility: a legacy single-product payload maps to lines[0]").
+ * Map a legacy single-product inference (`{product, qty, unit, unitPrice?,
+ * total?, priceBasis?}`) to a one-line draft. Used when the kernel's
+ * candidate metadata hasn't yet grown to the `{lines: [...]}` shape
+ * (xprize#56: "keep backward compatibility: a legacy single-product payload
+ * maps to lines[0]").
+ *
+ * `total`/`priceBasis` are the xprize#58 fix: money mentioned in the gesture
+ * must reach the line's money fields, not just `unitPrice`. When an explicit
+ * `priceBasis` is given and its corresponding field is present, that field
+ * wins; otherwise `total` (a lump-sum price, e.g. "12 eggs for $5") takes
+ * precedence over `unitPrice` (e.g. "12 eggs at $0.50") since a total is the
+ * more common phrasing and unitPrice can always be re-derived from it.
  */
 export function legacyFieldsToLine(
-  fields: { product?: string; qty?: number; unit?: string; unitPrice?: number },
+  fields: {
+    product?: string;
+    qty?: number;
+    unit?: string;
+    unitPrice?: number;
+    total?: number;
+    priceBasis?: PriceBasis;
+  },
   currency: string = DEFAULT_CURRENCY,
 ): DeliveryLineDraft {
   const empty = createEmptyLine(currency);
@@ -304,6 +319,13 @@ export function legacyFieldsToLine(
     unit: fields.unit ?? '',
   };
 
-  if (fields.unitPrice == null) return line;
-  return applyUnitPriceEdit(line, String(fields.unitPrice));
+  if (fields.priceBasis === 'per_unit' && fields.unitPrice != null) {
+    return applyUnitPriceEdit(line, String(fields.unitPrice));
+  }
+  if (fields.priceBasis === 'total' && fields.total != null) {
+    return applyTotalEdit(line, String(fields.total));
+  }
+  if (fields.total != null) return applyTotalEdit(line, String(fields.total));
+  if (fields.unitPrice != null) return applyUnitPriceEdit(line, String(fields.unitPrice));
+  return line;
 }

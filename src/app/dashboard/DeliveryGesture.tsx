@@ -45,6 +45,7 @@ import {
   KNOWN_UNITS,
   type ConfirmedLine,
   type DeliveryLineDraft,
+  type PriceBasis,
 } from '@/lib/deliveryLines';
 
 // ---------------------------------------------------------------------------
@@ -143,6 +144,57 @@ export function resolveHeaderFields(
 }
 
 // ---------------------------------------------------------------------------
+// Recipient activity / invite messaging (xprize#59) — exported for testing
+//
+// The recipient selector is now populated from the supplier's full
+// trust-graph connections, including contacts who've never been active on
+// AgriFortress before (xprize#59 requirement #1). `activeRecipientDids`
+// (best-effort, see `collectRecipientDids` in src/lib/supply.ts) tells us
+// which ones have. Naming an inactive one is still allowed — the delivery
+// attestation is created pending with them as subject exactly like an
+// active recipient (the claimable-stub move the issue describes) — but the
+// UI must say so, and confirm must additionally send them an invite.
+// ---------------------------------------------------------------------------
+
+/** True when the selected recipient has never been an AgriFortress recipient before (per the best-effort heuristic). */
+export function isRecipientPendingInvite(
+  recipientDid: string,
+  activeRecipientDids: ReadonlySet<string>,
+): boolean {
+  return recipientDid !== '' && !activeRecipientDids.has(recipientDid);
+}
+
+const INVITE_WILL_BE_SENT_MESSAGE =
+  "This recipient hasn't used AgriFortress yet \u2014 confirming will send them an invite to countersign this delivery.";
+
+/** "Invite will be sent" notice for the currently selected recipient, or undefined when none is needed. */
+export function inviteNoticeForRecipient(
+  recipientDid: string,
+  activeRecipientDids: ReadonlySet<string>,
+): string | undefined {
+  return isRecipientPendingInvite(recipientDid, activeRecipientDids) ? INVITE_WILL_BE_SENT_MESSAGE : undefined;
+}
+
+const NO_ACTIVE_CONNECTIONS_NOTICE =
+  'None of your Imajin connections have used AgriFortress yet \u2014 selecting one will send them an invite.';
+
+/**
+ * Distinguishes the two empty states the issue calls out: "no Imajin
+ * connections at all" (handled separately by `RecipientSelect`'s own empty
+ * state) vs "connections exist but none are active here" (this notice).
+ * Returns undefined when there are no connections at all, or when at least
+ * one connection is already active.
+ */
+export function noActiveConnectionsNotice(
+  connections: readonly ConnectionEntry[],
+  activeRecipientDids: ReadonlySet<string>,
+): string | undefined {
+  if (connections.length === 0) return undefined;
+  const anyActive = connections.some((connection) => activeRecipientDids.has(connection.did));
+  return anyActive ? undefined : NO_ACTIVE_CONNECTIONS_NOTICE;
+}
+
+// ---------------------------------------------------------------------------
 // Line items — exported for testing
 // ---------------------------------------------------------------------------
 
@@ -171,6 +223,115 @@ export function resolveLines(
   }
 
   return [createEmptyLine()];
+}
+
+// ---------------------------------------------------------------------------
+// Price-extraction fallback (xprize#58) — exported for testing
+//
+// The kernel-side inference vocabulary doesn't yet extract structured price
+// data at all (see ima-jin/imajin-ai
+// apps/kernel/src/lib/inference/vocabulary/agrifortress.ts: the systemPrompt's
+// metadata field list has no price fields), so a gesture like "12 eggs for
+// $5" gets its price text-shunted into the free-text `notes` field
+// ("price: $5") instead of the line's unitPrice/total. This fallback
+// recovers it on the app side: when there is exactly one line and its money
+// fields are still empty, it looks for a dollar amount in `notes`, guesses
+// whether it's a per-unit or lump-sum price from nearby keywords, applies it
+// via the same derivation helpers a human edit would use, and strips the
+// matched text out of `notes` — notes should only ever keep genuinely
+// unstructured remainder (xprize#58 acceptance), never structured money the
+// schema already has fields for.
+//
+// With more than one line there's no reliable way to know which line a lone
+// notes-field price belongs to, so it's left alone — still visible in notes,
+// still editable by hand.
+// ---------------------------------------------------------------------------
+
+const PRICE_AMOUNT_PATTERN = /\$\s*(\d+(?:\.\d{1,4})?)/;
+const PER_UNIT_HINT = /\b(at|per|each|apiece|unit)\b/i;
+const TOTAL_HINT = /\b(for|total|altogether|sum)\b/i;
+
+interface ExtractedNotesPrice {
+  dollars: number;
+  priceBasis: PriceBasis;
+  remainder: string;
+}
+
+/** The single word immediately adjacent to a match, trimmed — '' when there isn't one. */
+function adjacentWord(text: string, fromEnd: boolean): string {
+  const trimmed = text.trim();
+  if (trimmed === '') return '';
+  const words = trimmed.split(/\s+/);
+  return fromEnd ? words[words.length - 1] : words[0];
+}
+
+/**
+ * Find a dollar amount in free text and guess whether it's a per-unit or
+ * lump-sum ('total') price from the single word immediately adjacent to it
+ * — "at $0.50" / "$0.50 each" reads as per-unit, "for $5" / "price: $5" (no
+ * adjacent per-unit word) reads as a lump-sum total, matching the xprize#58
+ * acceptance criteria for both phrasings. Only the immediately adjacent word
+ * is checked (not the whole note) so an unrelated "at"/"for" earlier in a
+ * longer note doesn't misclassify the price. Returns null when no dollar
+ * amount is found.
+ */
+export function extractPriceFromNotes(notes: string): ExtractedNotesPrice | null {
+  const match = PRICE_AMOUNT_PATTERN.exec(notes);
+  if (match === null) return null;
+
+  const dollars = Number(match[1]);
+  if (!Number.isFinite(dollars)) return null;
+
+  const before = notes.slice(0, match.index);
+  const after = notes.slice(match.index + match[0].length);
+
+  const context = `${adjacentWord(before, true)} ${adjacentWord(after, false)}`;
+  const priceBasis: PriceBasis =
+    PER_UNIT_HINT.test(context) && !TOTAL_HINT.test(context) ? 'per_unit' : 'total';
+
+  // Strip a price "label" phrase immediately preceding the amount (e.g.
+  // "price:", "cost:", "for", "at") and a unit qualifier immediately
+  // following it (e.g. "each", "per unit") along with the amount itself, so
+  // notes keeps only genuinely unstructured remainder (xprize#58
+  // acceptance) — never the structured price the schema already has fields for.
+  const beforeStripped = before.replace(/\b(price|cost|total|for|at)\s*[:-]?\s*$/i, '');
+  const afterStripped = after.replace(/^\s*(per\s+\w+|each|apiece)\b/i, '');
+  const remainder = (beforeStripped + afterStripped)
+    .replace(/^[\s,.:;-]+|[\s,.:;-]+$/g, '')
+    .trim();
+
+  return { dollars, priceBasis, remainder };
+}
+
+/**
+ * Apply the notes price-extraction fallback to a resolved header + lines
+ * pair. Only fires for a single-line manifest whose money fields are still
+ * blank (i.e. nothing structured already populated them) — see rationale
+ * above.
+ */
+export function applyNotesPriceFallback(
+  header: DeliveryHeaderFields,
+  lines: readonly DeliveryLineDraft[],
+): { header: DeliveryHeaderFields; lines: DeliveryLineDraft[] } {
+  if (lines.length !== 1) return { header, lines: [...lines] };
+
+  const [line] = lines;
+  if (line.unitPrice.trim() !== '' || line.total.trim() !== '') {
+    return { header, lines: [...lines] };
+  }
+
+  const extracted = extractPriceFromNotes(header.notes);
+  if (extracted === null) return { header, lines: [...lines] };
+
+  const updatedLine =
+    extracted.priceBasis === 'per_unit'
+      ? applyUnitPriceEdit(line, String(extracted.dollars))
+      : applyTotalEdit(line, String(extracted.dollars));
+
+  return {
+    header: { ...header, notes: extracted.remainder },
+    lines: [updatedLine],
+  };
 }
 
 const DEFAULT_FAILED_MESSAGE =
@@ -208,8 +369,9 @@ export function resolveCaptureOutcome(
 
   const meta = capture.candidateIntents?.at(0)?.metadata ?? {};
   const hasAnyMeta = Object.values(meta).some((v) => v !== undefined && v !== '' && v !== null);
-  const header = resolveHeaderFields(meta, connections);
-  const lines = resolveLines(meta, priorLot);
+  const resolvedHeader = resolveHeaderFields(meta, connections);
+  const resolvedLines = resolveLines(meta, priorLot);
+  const { header, lines } = applyNotesPriceFallback(resolvedHeader, resolvedLines);
 
   if (!hasAnyMeta && priorLot === undefined) {
     return { kind: 'editing', header, lines, notice: ZERO_CANDIDATE_NOTICE };
@@ -263,11 +425,15 @@ export function buildEditingState(
   connections: readonly ConnectionEntry[] = [],
 ): EditingStateSnapshot {
   const meta = capture.candidateIntents?.at(0)?.metadata ?? {};
+  const { header, lines } = applyNotesPriceFallback(
+    resolveHeaderFields(meta, connections),
+    resolveLines(meta, priorLot),
+  );
   return {
     phase: 'editing',
     sessionId: capture.sessionId,
-    header: resolveHeaderFields(meta, connections),
-    lines: resolveLines(meta, priorLot),
+    header,
+    lines,
     captureResponse: capture,
   };
 }
@@ -339,21 +505,30 @@ export function InferenceDebugPanel(
 }
 
 // ---------------------------------------------------------------------------
-// Recipient selector — native <select> over trust-graph connections
-// (xprize#55). Per Ryan's correction on the issue, a native select is
-// preferred over a custom listbox/combobox. Dark-mode popup styling is
-// tracked separately (ima-jin/imajin-ai#1781) — not touched here.
+// Recipient selector — native <select> over the supplier's full trust-graph
+// connections (xprize#55, extended by xprize#59 to include contacts who've
+// never been active on AgriFortress before). Per Ryan's correction on #55,
+// a native select is preferred over a custom listbox/combobox — kept native
+// here too (xprize#59 notes: grey via a label suffix + a scoped `<option>`
+// text color, not a custom component). Dark-mode popup styling is tracked
+// separately (ima-jin/imajin-ai#1781) — not touched here; the inline color
+// below only dims text within the native popup and doesn't touch any global
+// styling.
 // ---------------------------------------------------------------------------
+
+const INACTIVE_OPTION_SUFFIX = ' — invite required';
+const INACTIVE_OPTION_COLOR = '#71717a'; // zinc-500, matching the app's existing dim-text palette
 
 function RecipientSelect(
   props: Readonly<{
     value: string;
     connections: readonly ConnectionEntry[];
+    activeRecipientDids: ReadonlySet<string>;
     disabled: boolean;
     onChange: (did: string) => void;
   }>,
 ) {
-  const { value, connections, disabled, onChange } = props;
+  const { value, connections, activeRecipientDids, disabled, onChange } = props;
 
   if (connections.length === 0) {
     return (
@@ -371,11 +546,18 @@ function RecipientSelect(
       className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white focus:border-zinc-500 focus:outline-none disabled:opacity-50"
     >
       <option value="">Select recipient…</option>
-      {connections.map((connection) => (
-        <option key={connection.did} value={connection.did}>
-          {connectionLabel(connection)}
-        </option>
-      ))}
+      {connections.map((connection) => {
+        const isActive = activeRecipientDids.has(connection.did);
+        return (
+          <option
+            key={connection.did}
+            value={connection.did}
+            style={isActive ? undefined : { color: INACTIVE_OPTION_COLOR }}
+          >
+            {connectionLabel(connection)}{isActive ? '' : INACTIVE_OPTION_SUFFIX}
+          </option>
+        );
+      })}
     </select>
   );
 }
@@ -485,10 +667,13 @@ function DeliveryLineRow(
 interface DeliveryGestureProps {
   readonly priorLot?: RecentLot;
   readonly connections?: readonly ConnectionEntry[];
+  /** DIDs the best-effort heuristic (see `collectRecipientDids`, src/lib/supply.ts) found as prior AgriFortress recipients (xprize#59). */
+  readonly activeRecipientDids?: readonly string[];
 }
 
-export function DeliveryGesture({ priorLot, connections = [] }: DeliveryGestureProps) {
+export function DeliveryGesture({ priorLot, connections = [], activeRecipientDids = [] }: DeliveryGestureProps) {
   const [state, setState] = useState<GestureState>({ phase: 'idle' });
+  const activeRecipientDidSet = new Set(activeRecipientDids);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const nextLineKeyRef = useRef(0);
@@ -665,6 +850,27 @@ export function DeliveryGesture({ priorLot, connections = [] }: DeliveryGestureP
       return;
     }
 
+    // The delivery attestation is already signed at this point (pending, with
+    // the chosen recipient as subject — same behavior whether or not they've
+    // been active on AgriFortress before, xprize#59's claimable-stub move).
+    // Sending the invite is best-effort and secondary: a failed invite send
+    // must never look like a failed delivery (claim boundary, AGENTS.md §4),
+    // so errors here are swallowed rather than surfaced as the confirm outcome.
+    if (isRecipientPendingInvite(header.recipient, activeRecipientDidSet)) {
+      const recipientConnection = connections.find((c) => c.did === header.recipient);
+      try {
+        await fetch('/api/connections/invite', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            recipientLabel: recipientConnection !== undefined ? connectionLabel(recipientConnection) : undefined,
+          }),
+        });
+      } catch {
+        // Best-effort — see comment above.
+      }
+    }
+
     const receiptUrl = getReceiptUrl(confirm.externalId);
     if (receiptUrl !== null) {
       globalThis.location.assign(receiptUrl);
@@ -751,9 +957,23 @@ export function DeliveryGesture({ priorLot, connections = [] }: DeliveryGestureP
               <RecipientSelect
                 value={header.recipient}
                 connections={connections}
+                activeRecipientDids={activeRecipientDidSet}
                 disabled={isSubmitting}
                 onChange={(did) => updateHeaderField('recipient', did)}
               />
+              {noActiveConnectionsNotice(connections, activeRecipientDidSet) !== undefined && (
+                <p className="text-xs text-zinc-500">
+                  {noActiveConnectionsNotice(connections, activeRecipientDidSet)}
+                </p>
+              )}
+              {inviteNoticeForRecipient(header.recipient, activeRecipientDidSet) !== undefined && (
+                <p
+                  data-testid="invite-notice"
+                  className="text-xs text-amber-300 bg-amber-950/30 border border-amber-800 rounded-lg px-3 py-2"
+                >
+                  {inviteNoticeForRecipient(header.recipient, activeRecipientDidSet)}
+                </p>
+              )}
             </div>
             <div className="space-y-1">
               <label className="text-xs text-zinc-400">Lot</label>

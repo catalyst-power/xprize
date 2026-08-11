@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { declareSupplyLot, confirmDelivery, getLotChain, recentLots } from './supply';
+import { collectRecipientDids, declareSupplyLot, confirmDelivery, getLotChain, recentLots } from './supply';
 import type { LotChain, RecentLot } from './supply';
 
 vi.mock('./kernel/client', () => ({ fetchKernel: vi.fn() }));
@@ -264,6 +264,65 @@ describe('confirmDelivery', () => {
     await expect(
       confirmDelivery({ lotId: '', commodity: 'eggs', quantity: 6, unit: 'dozen' }, 'att-scott-123'),
     ).rejects.toThrow('supply.received failed: 400');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// collectRecipientDids (xprize#59)
+//
+// Best-effort "active on AgriFortress" signal, scanned from already-fetched
+// lot chains. See the doc comment on the function itself for why this is a
+// heuristic (no authoritative kernel query exists) rather than a guarantee.
+// ---------------------------------------------------------------------------
+
+describe('collectRecipientDids', () => {
+  function chainWithPayloads(...payloads: unknown[]): LotChain {
+    return {
+      lot: { correlationId: 'lot_x', originatingDid: 'did:imajin:scott', commodity: 'eggs', status: 'received', createdAt: '2026-01-01T00:00:00Z' },
+      stages: payloads.map((payload, i) => ({
+        stage: `stage_${i}`,
+        actorDid: 'did:imajin:scott',
+        attestationCid: null,
+        priorCid: null,
+        payload,
+        createdAt: '2026-01-01T00:00:00Z',
+      })),
+    };
+  }
+
+  it('collects a recipientDid found on a stage payload', () => {
+    const chain = chainWithPayloads({ recipientDid: 'did:imajin:david' });
+    expect(collectRecipientDids([chain])).toEqual(new Set(['did:imajin:david']));
+  });
+
+  it('falls back to a "recipient" field when recipientDid is absent', () => {
+    const chain = chainWithPayloads({ recipient: 'did:imajin:grace' });
+    expect(collectRecipientDids([chain])).toEqual(new Set(['did:imajin:grace']));
+  });
+
+  it('prefers recipientDid over recipient when both are present', () => {
+    const chain = chainWithPayloads({ recipientDid: 'did:imajin:david', recipient: 'did:imajin:grace' });
+    expect(collectRecipientDids([chain])).toEqual(new Set(['did:imajin:david']));
+  });
+
+  it('collects DIDs across multiple stages and multiple chains', () => {
+    const chainA = chainWithPayloads({ recipientDid: 'did:imajin:david' }, { commodity: 'eggs' });
+    const chainB = chainWithPayloads({ recipientDid: 'did:imajin:grace' });
+    expect(collectRecipientDids([chainA, chainB])).toEqual(new Set(['did:imajin:david', 'did:imajin:grace']));
+  });
+
+  it('ignores stages with no recipient field', () => {
+    const chain = chainWithPayloads({ commodity: 'eggs', quantity: 6, unit: 'dozen' });
+    expect(collectRecipientDids([chain])).toEqual(new Set());
+  });
+
+  it('ignores non-object payloads', () => {
+    const chain = chainWithPayloads(null, 'a string payload', 42);
+    expect(collectRecipientDids([chain])).toEqual(new Set());
+  });
+
+  it('returns an empty set for an empty chain list', () => {
+    expect(collectRecipientDids([])).toEqual(new Set());
   });
 });
 

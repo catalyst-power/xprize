@@ -105,6 +105,47 @@ export async function getLotChain(
   return res.json() as Promise<LotChain>;
 }
 
+// ---------------------------------------------------------------------------
+// "Active on AgriFortress" heuristic (xprize#59)
+//
+// There is no kernel query for "attestations where DID X was the recipient"
+// today, and the DeliveryGesture confirm flow's chosen recipient DID isn't
+// even persisted server-side yet (known kernel limitation flagged in
+// xprize#57's PR description: the confirm route re-signs from the captured
+// session, never reading the request body). So "has this trust-graph
+// connection ever been an AgriFortress recipient" can only be answered
+// pragmatically from data already available to this app: the supplier's own
+// recent lot chains, best-effort-scanned for a recipient DID on any stage.
+// Until the kernel persists it, this will honestly resolve to "no signal" —
+// a safe default (never asserting familiarity without evidence) rather than
+// a broken feature. See the PR description for xprize#58/#59 for the fuller
+// writeup of this limitation.
+// ---------------------------------------------------------------------------
+
+function extractRecipientDid(payload: unknown): string | undefined {
+  if (typeof payload !== 'object' || payload === null) return undefined;
+  const record = payload as Record<string, unknown>;
+  const candidate = record.recipientDid ?? record.recipient;
+  return typeof candidate === 'string' && candidate !== '' ? candidate : undefined;
+}
+
+/**
+ * Scan a batch of lot chains (e.g. the supplier's recent lots, already
+ * fetched for the Recent Deliveries panel) for every recipient DID mentioned
+ * on any stage's payload. Used to grey out/annotate trust-graph connections
+ * that have never been an AgriFortress recipient before (xprize#59).
+ */
+export function collectRecipientDids(chains: readonly LotChain[]): Set<string> {
+  const dids = new Set<string>();
+  for (const chain of chains) {
+    for (const stage of chain.stages) {
+      const did = extractRecipientDid(stage.payload);
+      if (did !== undefined) dids.add(did);
+    }
+  }
+  return dids;
+}
+
 /**
  * Read the most recent lots for a supplier.
  * GET /supply/api/lots?supplier={did}&limit={n} — app-auth-gated (supply:read).

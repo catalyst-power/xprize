@@ -20,19 +20,35 @@
  */
 
 import { fetchKernel } from './kernel/client';
-import type { ConfirmedLine } from './deliveryLines';
+import type { ConfirmedLine, PriceBasis } from './deliveryLines';
 
 // ---------------------------------------------------------------------------
 // Request / response types
 // ---------------------------------------------------------------------------
 
-/** One inferred line item, before it's confirmed/priced (xprize#56). */
+/**
+ * One inferred line item, before it's confirmed/priced (xprize#56).
+ *
+ * `unitPrice`/`total`/`priceBasis` are forward-compatible fields for when the
+ * kernel-side inference vocabulary is taught to extract structured price
+ * data (xprize#58 — as of this writing it is not: see
+ * ima-jin/imajin-ai apps/kernel/src/lib/inference/vocabulary/agrifortress.ts,
+ * whose systemPrompt's metadata field list has no price fields at all, so a
+ * mentioned price currently lands in the free-text `notes` field instead).
+ * The app-side mapping in deliveryLines.ts/DeliveryGesture.tsx maps these
+ * through to the line's money fields when present, and otherwise falls back
+ * to parsing price-like text out of `notes`.
+ */
 export interface IntentLineMetadata {
   product?: string;
   qty?: number;
   unit?: string;
   /** Dollars per unit, if Gemini could infer a price. */
   unitPrice?: number;
+  /** Dollars, lump-sum for the whole line, if Gemini could infer a total price instead of a unit price. */
+  total?: number;
+  /** Which of `unitPrice`/`total` is authoritative, when both happen to be present. */
+  priceBasis?: PriceBasis;
 }
 
 export interface IntentMetadata {

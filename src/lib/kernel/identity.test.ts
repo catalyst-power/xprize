@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { getConnections, connectionLabel, type ConnectionEntry } from './identity';
+import { createConnectionInvite, getConnections, connectionLabel, type ConnectionEntry } from './identity';
 
 vi.mock('./client', () => ({ fetchKernel: vi.fn() }));
 
@@ -15,7 +15,7 @@ afterEach(() => {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function okResponse(body: { connections: ConnectionEntry[] }) {
+function okResponse(body: object) {
   return Promise.resolve({
     ok: true,
     status: 200,
@@ -96,5 +96,61 @@ describe('connectionLabel', () => {
   it('falls back to the raw DID as a last resort', () => {
     const conn: ConnectionEntry = { did: 'did:imajin:x', handle: null, name: null, nickname: null, connectedAt: '2026-01-01T00:00:00Z' };
     expect(connectionLabel(conn)).toBe('did:imajin:x');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createConnectionInvite (xprize#59)
+// ---------------------------------------------------------------------------
+
+const INVITE_RESPONSE = {
+  invite: { id: 'inv_1', code: 'abc123', delivery: 'link' as const, status: 'pending' },
+  url: 'https://connections.imajin.ai/invite/did:imajin:scott/abc123',
+};
+
+describe('createConnectionInvite', () => {
+  it('POSTs to /connections/api/invites via fetchKernel, passing the caller-supplied attestationId', async () => {
+    mockFetchKernel.mockReturnValue(okResponse(INVITE_RESPONSE));
+
+    await createConnectionInvite({ delivery: 'link', note: 'AgriFortress delivery pending' }, 'att-scott-123');
+
+    expect(mockFetchKernel).toHaveBeenCalledOnce();
+    const [path, opts, attestationId] = mockFetchKernel.mock.calls[0];
+    expect(path).toBe('/connections/api/invites');
+    expect(opts?.method).toBe('POST');
+    expect(attestationId).toBe('att-scott-123');
+  });
+
+  it('sends the request body as JSON', async () => {
+    mockFetchKernel.mockReturnValue(okResponse(INVITE_RESPONSE));
+
+    await createConnectionInvite({ delivery: 'link', note: 'note text' }, 'att-scott-123');
+
+    const [, opts] = mockFetchKernel.mock.calls[0];
+    expect(JSON.parse(opts?.body as string)).toEqual({ delivery: 'link', note: 'note text' });
+  });
+
+  it('returns the parsed CreateInviteResponse on success', async () => {
+    mockFetchKernel.mockReturnValue(okResponse(INVITE_RESPONSE));
+
+    const result = await createConnectionInvite({ delivery: 'link' }, 'att-scott-123');
+
+    expect(result.url).toBe(INVITE_RESPONSE.url);
+    expect(result.invite.code).toBe('abc123');
+  });
+
+  it('throws with status + error message on a kernel error response', async () => {
+    mockFetchKernel.mockReturnValue(
+      Promise.resolve({
+        ok: false,
+        status: 401,
+        statusText: 'Unauthorized',
+        json: () => Promise.resolve({ error: 'Not authenticated' }),
+      } as Response),
+    );
+
+    await expect(createConnectionInvite({ delivery: 'link' }, 'att-scott-123')).rejects.toThrow(
+      'identity.invites.create failed: 401',
+    );
   });
 });
