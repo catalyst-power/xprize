@@ -8,17 +8,24 @@ vi.mock('@/lib/supply', () => ({
   recentLots: vi.fn(),
 }));
 
+vi.mock('@/lib/kernel/identity', () => ({
+  getConnections: vi.fn(),
+}));
+
 import { getSession } from '@/lib/session';
 import { recentLots, type RecentLot } from '@/lib/supply';
+import { getConnections, type ConnectionEntry } from '@/lib/kernel/identity';
 import DashboardPage, {
   ConnectErrorBanner,
   connectErrorLabel,
   RecentDeliveries,
   resolveConnectError,
 } from './page';
+import { DeliveryGesture } from './DeliveryGesture';
 
 const mockGetSession = vi.mocked(getSession);
 const mockRecentLots = vi.mocked(recentLots);
+const mockGetConnections = vi.mocked(getConnections);
 
 const SESSION_USER = {
   did: 'did:imajin:scott',
@@ -85,10 +92,15 @@ function findElementOfType(node: unknown, type: unknown): { props?: Record<strin
   return findElementOfType(element.props?.['children'], type);
 }
 
+const CONNECTIONS: ConnectionEntry[] = [
+  { did: 'did:imajin:david', handle: 'david', name: 'David Ko', nickname: null, connectedAt: '2026-01-01T00:00:00Z' },
+];
+
 describe('DashboardPage', () => {
   it('renders the connect-error banner when connect_error is present in searchParams', async () => {
     mockGetSession.mockResolvedValue(SESSION_USER);
     mockRecentLots.mockResolvedValue([]);
+    mockGetConnections.mockResolvedValue([]);
 
     const element = await DashboardPage({
       searchParams: Promise.resolve({ connect_error: 'quickbooks' }),
@@ -102,6 +114,7 @@ describe('DashboardPage', () => {
   it('does not render the connect-error banner when connect_error is absent', async () => {
     mockGetSession.mockResolvedValue(SESSION_USER);
     mockRecentLots.mockResolvedValue([]);
+    mockGetConnections.mockResolvedValue([]);
 
     const element = await DashboardPage({ searchParams: Promise.resolve({}) });
 
@@ -111,6 +124,7 @@ describe('DashboardPage', () => {
   it('fetches up to 5 recent lots and passes them to RecentDeliveries (#49)', async () => {
     mockGetSession.mockResolvedValue(SESSION_USER);
     mockRecentLots.mockResolvedValue([]);
+    mockGetConnections.mockResolvedValue([]);
 
     await DashboardPage({ searchParams: Promise.resolve({}) });
 
@@ -129,12 +143,46 @@ describe('DashboardPage', () => {
     ];
     mockGetSession.mockResolvedValue(SESSION_USER);
     mockRecentLots.mockResolvedValue(lots);
+    mockGetConnections.mockResolvedValue([]);
 
     const element = await DashboardPage({ searchParams: Promise.resolve({}) });
 
     const recentDeliveries = findElementOfType(element, RecentDeliveries);
     expect(recentDeliveries).toBeDefined();
     expect(recentDeliveries?.props?.['lots']).toEqual(lots);
+  });
+
+  it("fetches the acting supplier's trust-graph connections (xprize#55)", async () => {
+    mockGetSession.mockResolvedValue(SESSION_USER);
+    mockRecentLots.mockResolvedValue([]);
+    mockGetConnections.mockResolvedValue(CONNECTIONS);
+
+    await DashboardPage({ searchParams: Promise.resolve({}) });
+
+    expect(mockGetConnections).toHaveBeenCalledWith(SESSION_USER.attestationId);
+  });
+
+  it('passes the fetched connections through to DeliveryGesture', async () => {
+    mockGetSession.mockResolvedValue(SESSION_USER);
+    mockRecentLots.mockResolvedValue([]);
+    mockGetConnections.mockResolvedValue(CONNECTIONS);
+
+    const element = await DashboardPage({ searchParams: Promise.resolve({}) });
+
+    const gesture = findElementOfType(element, DeliveryGesture);
+    expect(gesture).toBeDefined();
+    expect(gesture?.props?.['connections']).toEqual(CONNECTIONS);
+  });
+
+  it('renders DeliveryGesture with an empty connections list when the kernel call fails (fail-closed, non-fatal)', async () => {
+    mockGetSession.mockResolvedValue(SESSION_USER);
+    mockRecentLots.mockResolvedValue([]);
+    mockGetConnections.mockRejectedValue(new Error('identity.connections failed: 500 Internal Server Error'));
+
+    const element = await DashboardPage({ searchParams: Promise.resolve({}) });
+
+    const gesture = findElementOfType(element, DeliveryGesture);
+    expect(gesture?.props?.['connections']).toEqual([]);
   });
 });
 

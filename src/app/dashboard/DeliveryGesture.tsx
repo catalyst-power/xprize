@@ -3,13 +3,17 @@
 /**
  * DeliveryGesture — the AgriFortress AI-native delivery input.
  *
+ * The card is a packing slip (xprize#56): header (recipient/lot/notes) +
+ * 1..n line items (product/qty/unit/unitPrice/total/priceBasis). One
+ * confirm/sign by the deliverer covers the whole manifest.
+ *
  * Flow:
  *   1. Scott taps "Voice note" → MediaRecorder captures audio
  *      OR taps "Photo" → picks an image from camera/library
  *   2. File is sent to POST /api/inference/capture (server-side; never
  *      direct browser → kernel)
- *   3. candidateIntents[0].metadata pre-fills the delivery card — all fields
- *      fully editable (inference = prior, human = authority; AGENTS.md §4)
+ *   3. candidateIntents[0].metadata pre-fills the header + line items — all
+ *      fields fully editable (inference = prior, human = authority; AGENTS.md §4)
  *   4. Scott taps "Confirm delivery" → POST /api/inference/confirm/{sessionId}
  *   5. On success: signed attestationId shown. On failure: honest error —
  *      never a phantom receipt (same discipline as #17).
@@ -20,7 +24,28 @@
 
 import { useRef, useState } from 'react';
 import type { RecentLot } from '@/lib/supply';
-import type { CandidateIntent, InferenceCaptureResponse, IntentMetadata } from '@/lib/inference';
+import type {
+  CandidateIntent,
+  ConfirmIntentBody,
+  InferenceCaptureResponse,
+  IntentMetadata,
+} from '@/lib/inference';
+import { connectionLabel, type ConnectionEntry } from '@/lib/kernel/identity';
+import {
+  applyQtyEdit,
+  applyTotalEdit,
+  applyUnitPriceEdit,
+  createEmptyLine,
+  formatCents,
+  freezeLine,
+  isLineValid,
+  legacyFieldsToLine,
+  lineTotalLabel,
+  manifestGrandTotalCents,
+  KNOWN_UNITS,
+  type ConfirmedLine,
+  type DeliveryLineDraft,
+} from '@/lib/deliveryLines';
 
 // ---------------------------------------------------------------------------
 // Types (mirroring kernel spec from issue #5)
@@ -62,46 +87,107 @@ export function getReceiptUrl(externalId: string | undefined): string | null {
   return `/dashboard?lot=${encodeURIComponent(externalId)}`;
 }
 
-interface DeliveryFields {
-  product: string;
-  qty: string;
-  unit: string;
+// ---------------------------------------------------------------------------
+// Header fields (recipient / lot / notes) — exported for testing
+// ---------------------------------------------------------------------------
+
+export interface DeliveryHeaderFields {
+  /** The selected connection's DID, or '' when unset — never free text (xprize#55). */
   recipient: string;
   lot: string;
   notes: string;
 }
 
-// ---------------------------------------------------------------------------
-// Pre-fill helper — exported for testing
-// ---------------------------------------------------------------------------
+const EMPTY_HEADER_FIELDS: DeliveryHeaderFields = { recipient: '', lot: '', notes: '' };
 
 /**
- * Merge Gemini inference metadata with the most recent lot (a prior, never authority).
- * Inference wins when present; `priorLot.commodity` seeds the product field only when
- * inference returned nothing. The human's confirmation is the signing event.
+ * Resolve an inferred recipient string (a free-text name Gemini transcribed,
+ * or already a DID) to one of the acting supplier's trust-graph connections.
+ *
+ * The Recipient field is a native `<select>` over connections (xprize#55,
+ * per Ryan's correction on the issue: a native select is preferred over a
+ * custom listbox) — it can only hold a DID that is actually one of the
+ * options, so an inferred name with no matching connection resolves to ''
+ * (no selection) rather than being kept as free text. The raw inferred
+ * value is never lost — it's still visible in the always-on Inference Debug
+ * panel below (#49).
  */
-export function resolveDeliveryFields(
+export function resolveRecipientDid(
+  rawRecipient: string | undefined,
+  connections: readonly ConnectionEntry[],
+): string {
+  if (rawRecipient === undefined || rawRecipient === '') return '';
+
+  const byDid = connections.find((connection) => connection.did === rawRecipient);
+  if (byDid !== undefined) return byDid.did;
+
+  const normalized = rawRecipient.toLowerCase();
+  const byLabel = connections.find((connection) =>
+    [connection.nickname, connection.name, connection.handle].some(
+      (label) => label !== null && label.toLowerCase() === normalized,
+    ),
+  );
+  return byLabel?.did ?? '';
+}
+
+/** Merge Gemini inference metadata's header fields (recipient/lot/notes) — inference is a prior, never authority. */
+export function resolveHeaderFields(
   meta: IntentMetadata,
-  priorLot: RecentLot | undefined,
-): DeliveryFields {
+  connections: readonly ConnectionEntry[] = [],
+): DeliveryHeaderFields {
   return {
-    product: meta.product ?? priorLot?.commodity ?? '',
-    qty: meta.qty != null ? String(meta.qty) : '',
-    unit: meta.unit ?? '',
-    recipient: meta.recipient ?? '',
+    recipient: resolveRecipientDid(meta.recipient, connections),
     lot: meta.lot ?? '',
     notes: meta.notes ?? '',
   };
+}
+
+// ---------------------------------------------------------------------------
+// Line items — exported for testing
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the card's line items from inference metadata (xprize#56).
+ *
+ * Prefers the `lines` shape (one gesture, N lines). Falls back to the legacy
+ * single-product shape (`product`/`qty`/`unit` at the top level, seeded by
+ * `priorLot.commodity` when inference returned nothing) mapped to a single
+ * line — "keep backward compatibility: a legacy single-product payload maps
+ * to lines[0]". When there's truly nothing to prefill, starts with one
+ * empty line so the card always has at least one row to fill in.
+ */
+export function resolveLines(
+  meta: IntentMetadata,
+  priorLot: RecentLot | undefined,
+): DeliveryLineDraft[] {
+  if (meta.lines !== undefined && meta.lines.length > 0) {
+    return meta.lines.map((line) => legacyFieldsToLine(line));
+  }
+
+  const product = meta.product ?? priorLot?.commodity ?? undefined;
+  const hasLegacySingle = product !== undefined || meta.qty !== undefined || meta.unit !== undefined;
+  if (hasLegacySingle) {
+    return [legacyFieldsToLine({ product, qty: meta.qty, unit: meta.unit })];
+  }
+
+  return [createEmptyLine()];
 }
 
 const DEFAULT_FAILED_MESSAGE =
   'Could not understand the voice note — try again or fill in manually.';
 const ZERO_CANDIDATE_NOTICE =
   "We heard your voice note but couldn't extract details — fill in the fields below.";
+const INVALID_LINES_MESSAGE =
+  'Each line needs a product, unit, quantity, and consistent pricing before you can confirm.';
 
 type CaptureOutcome =
   | { kind: 'error'; errorMessage: string }
-  | { kind: 'editing'; fields: DeliveryFields; notice?: string };
+  | {
+      kind: 'editing';
+      header: DeliveryHeaderFields;
+      lines: DeliveryLineDraft[];
+      notice?: string;
+    };
 
 /**
  * Decide the UI outcome for a capture response, honoring the claim boundary
@@ -114,6 +200,7 @@ type CaptureOutcome =
 export function resolveCaptureOutcome(
   capture: CaptureResponse,
   priorLot: RecentLot | undefined,
+  connections: readonly ConnectionEntry[] = [],
 ): CaptureOutcome {
   if (capture.status === 'failed') {
     return { kind: 'error', errorMessage: capture.error ?? DEFAULT_FAILED_MESSAGE };
@@ -121,21 +208,29 @@ export function resolveCaptureOutcome(
 
   const meta = capture.candidateIntents?.at(0)?.metadata ?? {};
   const hasAnyMeta = Object.values(meta).some((v) => v !== undefined && v !== '' && v !== null);
-  const fields = resolveDeliveryFields(meta, priorLot);
+  const header = resolveHeaderFields(meta, connections);
+  const lines = resolveLines(meta, priorLot);
 
   if (!hasAnyMeta && priorLot === undefined) {
-    return { kind: 'editing', fields, notice: ZERO_CANDIDATE_NOTICE };
+    return { kind: 'editing', header, lines, notice: ZERO_CANDIDATE_NOTICE };
   }
 
-  return { kind: 'editing', fields };
+  return { kind: 'editing', header, lines };
 }
 
 type Phase = 'idle' | 'recording' | 'capturing' | 'editing' | 'submitting' | 'done' | 'error';
 
+/** A line draft plus a stable React list key, independent of its position (no array-index keys). */
+interface KeyedLine {
+  key: string;
+  draft: DeliveryLineDraft;
+}
+
 interface GestureState {
   phase: Phase;
   sessionId?: string;
-  fields?: DeliveryFields;
+  header?: DeliveryHeaderFields;
+  lines?: KeyedLine[];
   attestationId?: string;
   errorMessage?: string;
   /** The full inference capture response — kept for the always-visible debug panel below (xprize#49). */
@@ -148,8 +243,16 @@ interface GestureState {
 // Post-capture state builder — exported for testing
 // ---------------------------------------------------------------------------
 
+export interface EditingStateSnapshot {
+  phase: 'editing';
+  sessionId: string;
+  header: DeliveryHeaderFields;
+  lines: DeliveryLineDraft[];
+  captureResponse: CaptureResponse;
+}
+
 /**
- * Build the 'editing' state from a successful capture response. The full
+ * Build the 'editing' snapshot from a successful capture response. The full
  * `capture` response is retained verbatim as `captureResponse` — never
  * discarded — so the Inference Debug panel can always show exactly what
  * inference produced, not just the first candidate's fields (xprize#49).
@@ -157,28 +260,17 @@ interface GestureState {
 export function buildEditingState(
   capture: CaptureResponse,
   priorLot: RecentLot | undefined,
-): GestureState {
+  connections: readonly ConnectionEntry[] = [],
+): EditingStateSnapshot {
   const meta = capture.candidateIntents?.at(0)?.metadata ?? {};
   return {
     phase: 'editing',
     sessionId: capture.sessionId,
-    fields: resolveDeliveryFields(meta, priorLot),
+    header: resolveHeaderFields(meta, connections),
+    lines: resolveLines(meta, priorLot),
     captureResponse: capture,
   };
 }
-
-// ---------------------------------------------------------------------------
-// Field order for the delivery card
-// ---------------------------------------------------------------------------
-
-const DELIVERY_FIELDS: ReadonlyArray<[keyof DeliveryFields, string, 'text' | 'number']> = [
-  ['product', 'Product', 'text'],
-  ['qty', 'Quantity', 'number'],
-  ['unit', 'Unit', 'text'],
-  ['recipient', 'Recipient', 'text'],
-  ['lot', 'Lot', 'text'],
-  ['notes', 'Notes', 'text'],
-];
 
 // ---------------------------------------------------------------------------
 // Inference debug panel — pure, no hooks; ALWAYS visible while editing or
@@ -247,17 +339,168 @@ export function InferenceDebugPanel(
 }
 
 // ---------------------------------------------------------------------------
+// Recipient selector — native <select> over trust-graph connections
+// (xprize#55). Per Ryan's correction on the issue, a native select is
+// preferred over a custom listbox/combobox. Dark-mode popup styling is
+// tracked separately (ima-jin/imajin-ai#1781) — not touched here.
+// ---------------------------------------------------------------------------
+
+function RecipientSelect(
+  props: Readonly<{
+    value: string;
+    connections: readonly ConnectionEntry[];
+    disabled: boolean;
+    onChange: (did: string) => void;
+  }>,
+) {
+  const { value, connections, disabled, onChange } = props;
+
+  if (connections.length === 0) {
+    return (
+      <p className="text-xs text-zinc-500 italic rounded-lg border border-zinc-800 bg-zinc-800/50 px-3 py-2">
+        No connections yet — add a trust-graph connection to choose a recipient.
+      </p>
+    );
+  }
+
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      disabled={disabled}
+      className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white focus:border-zinc-500 focus:outline-none disabled:opacity-50"
+    >
+      <option value="">Select recipient…</option>
+      {connections.map((connection) => (
+        <option key={connection.did} value={connection.did}>
+          {connectionLabel(connection)}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Line item row — one packing-slip line (xprize#56). Product is currently a
+// free-text label; `product.id` is left unset here since full catalog
+// typed-ref selection is a follow-up (see PR description) — the shape
+// already supports attaching an id once that UI exists.
+// ---------------------------------------------------------------------------
+
+const UNITS_DATALIST_ID = 'delivery-line-units';
+
+function DeliveryLineRow(
+  props: Readonly<{
+    line: DeliveryLineDraft;
+    disabled: boolean;
+    canRemove: boolean;
+    onProductLabelChange: (label: string) => void;
+    onUnitChange: (unit: string) => void;
+    onQtyChange: (qty: string) => void;
+    onUnitPriceChange: (unitPrice: string) => void;
+    onTotalChange: (total: string) => void;
+    onRemove: () => void;
+  }>,
+) {
+  const {
+    line, disabled, canRemove,
+    onProductLabelChange, onUnitChange, onQtyChange, onUnitPriceChange, onTotalChange, onRemove,
+  } = props;
+  const totalLabel = lineTotalLabel(line);
+  const inputClassName =
+    'w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white placeholder:text-zinc-600 focus:border-zinc-500 focus:outline-none disabled:opacity-50';
+
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-zinc-800/40 p-3 space-y-2">
+      <div className="flex items-start justify-between gap-2">
+        <input
+          type="text"
+          placeholder="Product"
+          value={line.product.label}
+          onChange={(e) => onProductLabelChange(e.target.value)}
+          disabled={disabled}
+          className={inputClassName}
+        />
+        {canRemove && (
+          <button
+            type="button"
+            onClick={onRemove}
+            disabled={disabled}
+            aria-label="Remove line"
+            className="shrink-0 text-xs text-zinc-500 hover:text-red-400 px-2 py-2 disabled:opacity-50"
+          >
+            Remove
+          </button>
+        )}
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <input
+          type="number"
+          placeholder="Quantity"
+          value={line.qty}
+          onChange={(e) => onQtyChange(e.target.value)}
+          disabled={disabled}
+          className={inputClassName}
+        />
+        <input
+          type="text"
+          list={UNITS_DATALIST_ID}
+          placeholder="Unit"
+          value={line.unit}
+          onChange={(e) => onUnitChange(e.target.value)}
+          disabled={disabled}
+          className={inputClassName}
+        />
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <input
+          type="text"
+          placeholder="Unit price ($)"
+          value={line.unitPrice}
+          onChange={(e) => onUnitPriceChange(e.target.value)}
+          disabled={disabled}
+          className={inputClassName}
+        />
+        <input
+          type="text"
+          placeholder="Total ($)"
+          value={line.total}
+          onChange={(e) => onTotalChange(e.target.value)}
+          disabled={disabled}
+          className={inputClassName}
+        />
+      </div>
+
+      {totalLabel !== null && <p className="text-xs text-zinc-500">{totalLabel}</p>}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
 interface DeliveryGestureProps {
   readonly priorLot?: RecentLot;
+  readonly connections?: readonly ConnectionEntry[];
 }
 
-export function DeliveryGesture({ priorLot }: DeliveryGestureProps) {
+export function DeliveryGesture({ priorLot, connections = [] }: DeliveryGestureProps) {
   const [state, setState] = useState<GestureState>({ phase: 'idle' });
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const nextLineKeyRef = useRef(0);
+
+  function makeLineKey(): string {
+    nextLineKeyRef.current += 1;
+    return `line-${nextLineKeyRef.current}`;
+  }
+
+  function toKeyedLines(drafts: readonly DeliveryLineDraft[]): KeyedLine[] {
+    return drafts.map((draft) => ({ key: makeLineKey(), draft }));
+  }
 
   // --- Capture ---
 
@@ -285,7 +528,7 @@ export function DeliveryGesture({ priorLot }: DeliveryGestureProps) {
       return;
     }
 
-    const outcome = resolveCaptureOutcome(capture, priorLot);
+    const outcome = resolveCaptureOutcome(capture, priorLot, connections);
     if (outcome.kind === 'error') {
       setState({ phase: 'error', errorMessage: outcome.errorMessage });
       return;
@@ -293,7 +536,8 @@ export function DeliveryGesture({ priorLot }: DeliveryGestureProps) {
     setState({
       phase: 'editing',
       sessionId: capture.sessionId,
-      fields: outcome.fields,
+      header: outcome.header,
+      lines: toKeyedLines(outcome.lines),
       notice: outcome.notice,
       captureResponse: capture,
     });
@@ -339,11 +583,30 @@ export function DeliveryGesture({ priorLot }: DeliveryGestureProps) {
     if (file) void sendCapture(file, file.name);
   }
 
-  // --- Editing ---
+  // --- Editing: header ---
 
-  function updateField(key: keyof DeliveryFields, value: string): void {
-    if (state.phase !== 'editing' || state.fields === undefined) return;
-    setState({ ...state, fields: { ...state.fields, [key]: value } });
+  function updateHeaderField(key: keyof DeliveryHeaderFields, value: string): void {
+    if (state.phase !== 'editing' || state.header === undefined) return;
+    setState({ ...state, header: { ...state.header, [key]: value } });
+  }
+
+  // --- Editing: line items ---
+
+  function updateLine(key: string, updater: (line: DeliveryLineDraft) => DeliveryLineDraft): void {
+    if (state.phase !== 'editing' || state.lines === undefined) return;
+    const nextLines = state.lines.map((l) => (l.key === key ? { key: l.key, draft: updater(l.draft) } : l));
+    setState({ ...state, lines: nextLines });
+  }
+
+  function addLine(): void {
+    if (state.phase !== 'editing' || state.lines === undefined) return;
+    setState({ ...state, lines: [...state.lines, { key: makeLineKey(), draft: createEmptyLine() }] });
+  }
+
+  function removeLine(key: string): void {
+    if (state.phase !== 'editing' || state.lines === undefined) return;
+    if (state.lines.length <= 1) return; // the manifest always keeps at least one line
+    setState({ ...state, lines: state.lines.filter((l) => l.key !== key) });
   }
 
   // --- Confirm ---
@@ -351,14 +614,44 @@ export function DeliveryGesture({ priorLot }: DeliveryGestureProps) {
   async function handleConfirm(): Promise<void> {
     if (state.phase !== 'editing' || state.sessionId === undefined) return;
     const { sessionId } = state;
+    const header = state.header ?? EMPTY_HEADER_FIELDS;
+    const lines = state.lines ?? [];
+
+    // Freeze qty/unitPrice/total per line, mutually consistent, validated at
+    // sign time — the signed payload contains exact resolved numbers, never
+    // formulas (AGENTS.md §4: never a signed ambiguity).
+    const frozenLines: ConfirmedLine[] = [];
+    for (const { draft } of lines) {
+      const frozen = freezeLine(draft);
+      if (frozen === null) {
+        setState({ phase: 'error', errorMessage: INVALID_LINES_MESSAGE });
+        return;
+      }
+      frozenLines.push(frozen);
+    }
+    if (frozenLines.length === 0) {
+      setState({ phase: 'error', errorMessage: INVALID_LINES_MESSAGE });
+      return;
+    }
 
     setState({ ...state, phase: 'submitting' });
+
+    const confirmedCard: ConfirmIntentBody = {
+      ...(header.recipient !== '' ? { recipient: header.recipient } : {}),
+      ...(header.lot !== '' ? { lot: header.lot } : {}),
+      ...(header.notes !== '' ? { notes: header.notes } : {}),
+      lines: frozenLines,
+    };
 
     let confirm: ConfirmResponse;
     try {
       const res = await fetch(
         `/api/inference/confirm/${encodeURIComponent(sessionId)}`,
-        { method: 'POST' },
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(confirmedCard),
+        },
       );
       const data = await res.json() as ConfirmResponse | { error?: string };
       if (!res.ok) {
@@ -429,9 +722,11 @@ export function DeliveryGesture({ priorLot }: DeliveryGestureProps) {
 
   if (state.phase === 'editing' || state.phase === 'submitting') {
     const isSubmitting = state.phase === 'submitting';
-    const fields = state.fields ?? {
-      product: '', qty: '', unit: '', recipient: '', lot: '', notes: '',
-    };
+    const header = state.header ?? EMPTY_HEADER_FIELDS;
+    const lines = state.lines ?? [];
+    const drafts = lines.map((l) => l.draft);
+    const allLinesValid = drafts.length > 0 && drafts.every((draft) => isLineValid(draft));
+    const grandTotalCents = manifestGrandTotalCents(drafts);
 
     return (
       <div className="space-y-4">
@@ -449,25 +744,86 @@ export function DeliveryGesture({ priorLot }: DeliveryGestureProps) {
             </p>
           )}
 
+          {/* Header — recipient (DID selector, xprize#55), lot, notes */}
           <div className="space-y-3">
-            {DELIVERY_FIELDS.map(([key, label, inputType]) => (
-              <div key={key} className="space-y-1">
-                <label className="text-xs text-zinc-400">{label}</label>
-                <input
-                  type={inputType}
-                  value={fields[key]}
-                  onChange={(e) => updateField(key, e.target.value)}
-                  disabled={isSubmitting}
-                  className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white placeholder:text-zinc-600 focus:border-zinc-500 focus:outline-none disabled:opacity-50"
-                />
-              </div>
+            <div className="space-y-1">
+              <label className="text-xs text-zinc-400">Recipient</label>
+              <RecipientSelect
+                value={header.recipient}
+                connections={connections}
+                disabled={isSubmitting}
+                onChange={(did) => updateHeaderField('recipient', did)}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-zinc-400">Lot</label>
+              <input
+                type="text"
+                value={header.lot}
+                onChange={(e) => updateHeaderField('lot', e.target.value)}
+                disabled={isSubmitting}
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white placeholder:text-zinc-600 focus:border-zinc-500 focus:outline-none disabled:opacity-50"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-zinc-400">Notes</label>
+              <input
+                type="text"
+                value={header.notes}
+                onChange={(e) => updateHeaderField('notes', e.target.value)}
+                disabled={isSubmitting}
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white placeholder:text-zinc-600 focus:border-zinc-500 focus:outline-none disabled:opacity-50"
+              />
+            </div>
+          </div>
+
+          {/* Line items — 1..n, each a product + qty/unit + unitPrice/total (xprize#56) */}
+          <div className="space-y-3">
+            <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">
+              Line items
+            </p>
+
+            {lines.map(({ key, draft }) => (
+              <DeliveryLineRow
+                key={key}
+                line={draft}
+                disabled={isSubmitting}
+                canRemove={lines.length > 1}
+                onProductLabelChange={(label) =>
+                  updateLine(key, (l) => ({ ...l, product: { ...l.product, label } }))
+                }
+                onUnitChange={(unit) => updateLine(key, (l) => ({ ...l, unit }))}
+                onQtyChange={(qty) => updateLine(key, (l) => applyQtyEdit(l, qty))}
+                onUnitPriceChange={(unitPrice) => updateLine(key, (l) => applyUnitPriceEdit(l, unitPrice))}
+                onTotalChange={(total) => updateLine(key, (l) => applyTotalEdit(l, total))}
+                onRemove={() => removeLine(key)}
+              />
             ))}
+
+            <datalist id={UNITS_DATALIST_ID}>
+              {KNOWN_UNITS.map((unit) => <option key={unit} value={unit} />)}
+            </datalist>
+
+            <button
+              type="button"
+              onClick={addLine}
+              disabled={isSubmitting}
+              className="w-full rounded-lg border border-dashed border-zinc-700 px-3 py-2 text-xs font-medium text-zinc-400 hover:border-zinc-500 hover:text-zinc-200 disabled:opacity-50 transition-colors"
+            >
+              + Add line
+            </button>
+          </div>
+
+          {/* Manifest grand total */}
+          <div className="flex items-center justify-between border-t border-zinc-800 pt-3">
+            <span className="text-xs text-zinc-400">Manifest total</span>
+            <span className="text-sm font-semibold text-white">${formatCents(grandTotalCents)}</span>
           </div>
 
           <button
             type="button"
             onClick={() => void handleConfirm()}
-            disabled={isSubmitting}
+            disabled={isSubmitting || !allLinesValid}
             className="w-full rounded-lg bg-white px-4 py-2.5 text-sm font-semibold text-black hover:bg-zinc-100 disabled:opacity-50 transition-colors"
           >
             {isSubmitting ? 'Signing…' : 'Confirm delivery'}
