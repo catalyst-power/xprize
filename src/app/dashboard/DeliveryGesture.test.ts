@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
+  applyNotesPriceFallback,
   buildEditingState,
+  extractPriceFromNotes,
   getReceiptUrl,
   InferenceDebugPanel,
   resolveHeaderFields,
@@ -8,7 +10,15 @@ import {
   resolveRecipientDid,
   resolveCaptureOutcome,
   type CaptureResponse,
+  type DeliveryHeaderFields,
 } from './DeliveryGesture';
+import {
+  createEmptyLine,
+  parseCents,
+  parseUnitPriceScaled,
+  UNIT_PRICE_SCALE,
+  type DeliveryLineDraft,
+} from '@/lib/deliveryLines';
 import type { RecentLot } from '@/lib/supply';
 import type { ConnectionEntry } from '@/lib/kernel/identity';
 
@@ -146,6 +156,110 @@ describe('resolveLines', () => {
     expect(lines).toHaveLength(1);
     expect(lines[0].product.label).toBe('');
     expect(lines[0].qty).toBe('');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// extractPriceFromNotes / applyNotesPriceFallback (xprize#58)
+//
+// The kernel-side inference vocabulary doesn't yet extract structured price
+// fields (see ima-jin/imajin-ai
+// apps/kernel/src/lib/inference/vocabulary/agrifortress.ts), so a mentioned
+// price gets text-shunted into the free-text notes field instead of the
+// line's money fields. This fallback recovers it on the app side.
+// ---------------------------------------------------------------------------
+
+describe('extractPriceFromNotes', () => {
+  it('extracts a lump-sum total from "price: $5" (the exact xprize#58 repro text) with no per-unit hint', () => {
+    const extracted = extractPriceFromNotes('price: $5');
+    expect(extracted).not.toBeNull();
+    expect(extracted?.dollars).toBe(5);
+    expect(extracted?.priceBasis).toBe('total');
+    expect(extracted?.remainder).toBe('');
+  });
+
+  it('extracts a per-unit price from text carrying an "at" hint', () => {
+    const extracted = extractPriceFromNotes('at $0.50');
+    expect(extracted).not.toBeNull();
+    expect(extracted?.dollars).toBe(0.5);
+    expect(extracted?.priceBasis).toBe('per_unit');
+    expect(extracted?.remainder).toBe('');
+  });
+
+  it('extracts a per-unit price from an "each" hint after the amount', () => {
+    const extracted = extractPriceFromNotes('$0.50 each');
+    expect(extracted).not.toBeNull();
+    expect(extracted?.priceBasis).toBe('per_unit');
+  });
+
+  it('preserves genuinely unstructured remainder text around the price, stripping only the price label', () => {
+    const extracted = extractPriceFromNotes('left at gate, price: $5');
+    expect(extracted?.dollars).toBe(5);
+    expect(extracted?.priceBasis).toBe('total');
+    expect(extracted?.remainder).toBe('left at gate');
+  });
+
+  it('does not misclassify priceBasis from an unrelated "at" earlier in a longer note', () => {
+    // The "at" in "left at gate" is unrelated to the price -- only the word
+    // immediately adjacent to the amount ("price:") should be consulted.
+    const extracted = extractPriceFromNotes('left at gate, price: $5');
+    expect(extracted?.priceBasis).toBe('total');
+  });
+
+  it('returns null when there is no dollar amount in the text', () => {
+    expect(extractPriceFromNotes('left at gate')).toBeNull();
+  });
+
+  it('returns null for empty text', () => {
+    expect(extractPriceFromNotes('')).toBeNull();
+  });
+});
+
+function singleLine(overrides: Partial<DeliveryLineDraft> = {}): DeliveryLineDraft {
+  return { ...createEmptyLine(), product: { label: 'eggs' }, unit: 'units', qty: '12', ...overrides };
+}
+
+describe('applyNotesPriceFallback', () => {
+  it('recovers a lump-sum total from notes: "12 eggs for $5" repro -> total $5.00 (manifest), priceBasis total, notes emptied', () => {
+    const header: DeliveryHeaderFields = { recipient: '', lot: '', notes: 'price: $5' };
+    const result = applyNotesPriceFallback(header, [singleLine()]);
+    expect(parseCents(result.lines[0].total)).toBe(500); // -> manifest shows $5.00
+    expect(result.lines[0].priceBasis).toBe('total');
+    expect(result.header.notes).toBe('');
+  });
+
+  it('recovers a per-unit price from notes: "12 eggs at $0.50" -> unitPrice $0.50, total $6.00, priceBasis per_unit', () => {
+    const header: DeliveryHeaderFields = { recipient: '', lot: '', notes: 'at $0.50' };
+    const result = applyNotesPriceFallback(header, [singleLine()]);
+    expect(parseUnitPriceScaled(result.lines[0].unitPrice)).toBe(50 * UNIT_PRICE_SCALE);
+    expect(result.lines[0].total).toBe('6.00');
+    expect(result.lines[0].priceBasis).toBe('per_unit');
+    expect(result.header.notes).toBe('');
+  });
+
+  it('does nothing when notes has no price mention (no-price gesture regression)', () => {
+    const header: DeliveryHeaderFields = { recipient: '', lot: '', notes: 'left at gate' };
+    const result = applyNotesPriceFallback(header, [singleLine()]);
+    expect(result.lines[0].total).toBe('');
+    expect(result.lines[0].unitPrice).toBe('');
+    expect(result.header.notes).toBe('left at gate');
+  });
+
+  it('does not override a line whose money fields are already structured', () => {
+    const header: DeliveryHeaderFields = { recipient: '', lot: '', notes: 'price: $99' };
+    const already = singleLine({ unitPrice: '1.00', total: '12.00', priceBasis: 'per_unit' as const });
+    const result = applyNotesPriceFallback(header, [already]);
+    expect(result.lines[0].total).toBe('12.00');
+    expect(result.header.notes).toBe('price: $99');
+  });
+
+  it('does not attempt extraction across multiple lines (ambiguous attribution)', () => {
+    const header: DeliveryHeaderFields = { recipient: '', lot: '', notes: 'price: $5' };
+    const lines = [singleLine(), singleLine({ product: { label: 'chickens' } })];
+    const result = applyNotesPriceFallback(header, lines);
+    expect(result.lines[0].total).toBe('');
+    expect(result.lines[1].total).toBe('');
+    expect(result.header.notes).toBe('price: $5');
   });
 });
 

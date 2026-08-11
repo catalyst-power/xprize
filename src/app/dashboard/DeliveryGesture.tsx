@@ -45,6 +45,7 @@ import {
   KNOWN_UNITS,
   type ConfirmedLine,
   type DeliveryLineDraft,
+  type PriceBasis,
 } from '@/lib/deliveryLines';
 
 // ---------------------------------------------------------------------------
@@ -173,6 +174,115 @@ export function resolveLines(
   return [createEmptyLine()];
 }
 
+// ---------------------------------------------------------------------------
+// Price-extraction fallback (xprize#58) — exported for testing
+//
+// The kernel-side inference vocabulary doesn't yet extract structured price
+// data at all (see ima-jin/imajin-ai
+// apps/kernel/src/lib/inference/vocabulary/agrifortress.ts: the systemPrompt's
+// metadata field list has no price fields), so a gesture like "12 eggs for
+// $5" gets its price text-shunted into the free-text `notes` field
+// ("price: $5") instead of the line's unitPrice/total. This fallback
+// recovers it on the app side: when there is exactly one line and its money
+// fields are still empty, it looks for a dollar amount in `notes`, guesses
+// whether it's a per-unit or lump-sum price from nearby keywords, applies it
+// via the same derivation helpers a human edit would use, and strips the
+// matched text out of `notes` — notes should only ever keep genuinely
+// unstructured remainder (xprize#58 acceptance), never structured money the
+// schema already has fields for.
+//
+// With more than one line there's no reliable way to know which line a lone
+// notes-field price belongs to, so it's left alone — still visible in notes,
+// still editable by hand.
+// ---------------------------------------------------------------------------
+
+const PRICE_AMOUNT_PATTERN = /\$\s*(\d+(?:\.\d{1,4})?)/;
+const PER_UNIT_HINT = /\b(at|per|each|apiece|unit)\b/i;
+const TOTAL_HINT = /\b(for|total|altogether|sum)\b/i;
+
+interface ExtractedNotesPrice {
+  dollars: number;
+  priceBasis: PriceBasis;
+  remainder: string;
+}
+
+/** The single word immediately adjacent to a match, trimmed — '' when there isn't one. */
+function adjacentWord(text: string, fromEnd: boolean): string {
+  const trimmed = text.trim();
+  if (trimmed === '') return '';
+  const words = trimmed.split(/\s+/);
+  return fromEnd ? words[words.length - 1] : words[0];
+}
+
+/**
+ * Find a dollar amount in free text and guess whether it's a per-unit or
+ * lump-sum ('total') price from the single word immediately adjacent to it
+ * — "at $0.50" / "$0.50 each" reads as per-unit, "for $5" / "price: $5" (no
+ * adjacent per-unit word) reads as a lump-sum total, matching the xprize#58
+ * acceptance criteria for both phrasings. Only the immediately adjacent word
+ * is checked (not the whole note) so an unrelated "at"/"for" earlier in a
+ * longer note doesn't misclassify the price. Returns null when no dollar
+ * amount is found.
+ */
+export function extractPriceFromNotes(notes: string): ExtractedNotesPrice | null {
+  const match = PRICE_AMOUNT_PATTERN.exec(notes);
+  if (match === null) return null;
+
+  const dollars = Number(match[1]);
+  if (!Number.isFinite(dollars)) return null;
+
+  const before = notes.slice(0, match.index);
+  const after = notes.slice(match.index + match[0].length);
+
+  const context = `${adjacentWord(before, true)} ${adjacentWord(after, false)}`;
+  const priceBasis: PriceBasis =
+    PER_UNIT_HINT.test(context) && !TOTAL_HINT.test(context) ? 'per_unit' : 'total';
+
+  // Strip a price "label" phrase immediately preceding the amount (e.g.
+  // "price:", "cost:", "for", "at") and a unit qualifier immediately
+  // following it (e.g. "each", "per unit") along with the amount itself, so
+  // notes keeps only genuinely unstructured remainder (xprize#58
+  // acceptance) — never the structured price the schema already has fields for.
+  const beforeStripped = before.replace(/\b(price|cost|total|for|at)\s*[:-]?\s*$/i, '');
+  const afterStripped = after.replace(/^\s*(per\s+\w+|each|apiece)\b/i, '');
+  const remainder = (beforeStripped + afterStripped)
+    .replace(/^[\s,.:;-]+|[\s,.:;-]+$/g, '')
+    .trim();
+
+  return { dollars, priceBasis, remainder };
+}
+
+/**
+ * Apply the notes price-extraction fallback to a resolved header + lines
+ * pair. Only fires for a single-line manifest whose money fields are still
+ * blank (i.e. nothing structured already populated them) — see rationale
+ * above.
+ */
+export function applyNotesPriceFallback(
+  header: DeliveryHeaderFields,
+  lines: readonly DeliveryLineDraft[],
+): { header: DeliveryHeaderFields; lines: DeliveryLineDraft[] } {
+  if (lines.length !== 1) return { header, lines: [...lines] };
+
+  const [line] = lines;
+  if (line.unitPrice.trim() !== '' || line.total.trim() !== '') {
+    return { header, lines: [...lines] };
+  }
+
+  const extracted = extractPriceFromNotes(header.notes);
+  if (extracted === null) return { header, lines: [...lines] };
+
+  const updatedLine =
+    extracted.priceBasis === 'per_unit'
+      ? applyUnitPriceEdit(line, String(extracted.dollars))
+      : applyTotalEdit(line, String(extracted.dollars));
+
+  return {
+    header: { ...header, notes: extracted.remainder },
+    lines: [updatedLine],
+  };
+}
+
 const DEFAULT_FAILED_MESSAGE =
   'Could not understand the voice note — try again or fill in manually.';
 const ZERO_CANDIDATE_NOTICE =
@@ -208,8 +318,9 @@ export function resolveCaptureOutcome(
 
   const meta = capture.candidateIntents?.at(0)?.metadata ?? {};
   const hasAnyMeta = Object.values(meta).some((v) => v !== undefined && v !== '' && v !== null);
-  const header = resolveHeaderFields(meta, connections);
-  const lines = resolveLines(meta, priorLot);
+  const resolvedHeader = resolveHeaderFields(meta, connections);
+  const resolvedLines = resolveLines(meta, priorLot);
+  const { header, lines } = applyNotesPriceFallback(resolvedHeader, resolvedLines);
 
   if (!hasAnyMeta && priorLot === undefined) {
     return { kind: 'editing', header, lines, notice: ZERO_CANDIDATE_NOTICE };
@@ -263,11 +374,15 @@ export function buildEditingState(
   connections: readonly ConnectionEntry[] = [],
 ): EditingStateSnapshot {
   const meta = capture.candidateIntents?.at(0)?.metadata ?? {};
+  const { header, lines } = applyNotesPriceFallback(
+    resolveHeaderFields(meta, connections),
+    resolveLines(meta, priorLot),
+  );
   return {
     phase: 'editing',
     sessionId: capture.sessionId,
-    header: resolveHeaderFields(meta, connections),
-    lines: resolveLines(meta, priorLot),
+    header,
+    lines,
     captureResponse: capture,
   };
 }
