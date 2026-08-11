@@ -4,6 +4,7 @@ import {
   buildEditingState,
   extractPriceFromNotes,
   getReceiptUrl,
+  hasRecipient,
   InferenceDebugPanel,
   inviteNoticeForRecipient,
   isRecipientPendingInvite,
@@ -317,6 +318,29 @@ describe('noActiveConnectionsNotice', () => {
     const notice = noActiveConnectionsNotice(CONNECTIONS, new Set());
     expect(notice).toBeDefined();
     expect(notice).toMatch(/invite|active/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// hasRecipient (xprize#65)
+//
+// The recipient DID is the delivery attestation's subject — a receipt with no
+// subject is unsignable, so the confirm gesture must be gated on it. With an
+// empty trust graph the <select> only offers the "No connections yet"
+// placeholder and recipient stays ''.
+// ---------------------------------------------------------------------------
+
+describe('hasRecipient', () => {
+  it('is false when no recipient has been selected (empty trust graph placeholder)', () => {
+    expect(hasRecipient({ recipient: '', lot: '', notes: '' })).toBe(false);
+  });
+
+  it('is false for a whitespace-only recipient', () => {
+    expect(hasRecipient({ recipient: '   ', lot: '', notes: '' })).toBe(false);
+  });
+
+  it('is true once a connection DID is selected', () => {
+    expect(hasRecipient({ recipient: 'did:imajin:david', lot: '', notes: '' })).toBe(true);
   });
 });
 
