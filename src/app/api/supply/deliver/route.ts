@@ -40,6 +40,13 @@ interface DeliverRequestBody {
   quantity: number;
   unit: string;
   priorCid?: string;
+  /**
+   * Optional counterparty DID to countersign the receipt (ima-jin/imajin-ai#1820/#1821).
+   * Forwarded as-is to `confirmDelivery`, which is the single place that
+   * validates/sanitizes it (see `SupplyReceivedRequest` in src/lib/supply.ts) —
+   * never re-validated here, to avoid a second source of truth.
+   */
+  recipientDid?: string;
 }
 
 interface DeliverSuccessResponse {
@@ -70,7 +77,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { commodity, quantity, unit, priorCid } = body;
+  const { commodity, quantity, unit, priorCid, recipientDid } = body;
 
   if (typeof commodity !== 'string' || !commodity) {
     return NextResponse.json({ error: 'commodity (string) is required' }, { status: 400 });
@@ -101,6 +108,7 @@ export async function POST(request: NextRequest) {
         quantity,
         unit,
         ...(priorCid !== undefined ? { priorCid } : {}),
+        ...(recipientDid !== undefined ? { recipientDid } : {}),
       },
       user.attestationId,
     );

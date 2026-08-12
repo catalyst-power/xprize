@@ -84,11 +84,23 @@ Response 201: { ok: true, correlationId: string, stage: "collected"|"processed"|
 The downstream recipient confirms receipt. `lotId` required.
 
 ```
-Body: { commodity, quantity, unit, lotId: string, priorCid? }
+Body: { commodity, quantity, unit, lotId: string, priorCid?, recipientDid? }
 Response 201: { ok: true, correlationId: string, stage: "received" }
 ```
 
-Note: `declared`–`listed` set `supplierDid = userDid`. `received` sets `recipientDid = userDid`.
+Note: `declared`–`listed` set `supplierDid = userDid`. `received` sets `issuer = userDid` (the
+caller/supplier) and `subject = recipientDid` when an optional `recipientDid` is sent — the
+counterparty being asked to countersign (ima-jin/imajin-ai#1820/#1821). The kernel's bus reactor
+then best-effort-notifies that counterparty (email/in-app, preference-gated) with a deep link.
+Omitting `recipientDid` (or sending it as `undefined`/blank) preserves the pre-#1820 self-attested
+behavior (`issuer === subject === userDid`) — additive/backward-compatible, safe against a kernel
+that hasn't deployed #1821 yet (extra body fields are ignored). `originUrl` is NOT part of this
+route's contract — that field only threads through the kernel's internal, server-to-server
+attestation-creation path, never this app-auth-gated route.
+
+See `confirmDelivery`/`SupplyReceivedRequest` in `src/lib/supply.ts`, which only forwards
+`recipientDid` when it looks like a real DID (never an empty string or a free-text placeholder
+for an unclaimed recipient stub).
 
 ### GET `/supply/api/lots?supplier={did}&limit={n}`
 
