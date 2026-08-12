@@ -11,6 +11,8 @@
  * `attestationCid` per stage but never the attestation's bilateral status.
  */
 
+import { fetchKernel } from './client';
+
 const DEFAULT_KERNEL_URL = 'https://imajin.ai';
 
 export type AttestationStatus = 'pending' | 'bilateral' | 'declined' | 'collecting' | 'executed' | 'expired';
@@ -69,4 +71,46 @@ export async function isReceiptBilateral(
     status: 'bilateral',
   });
   return records.some((record) => record.contextId === correlationId);
+}
+
+// ---------------------------------------------------------------------------
+// countersignAttestation — the pending-signatures inbox's sign action
+// (xprize#74)
+// ---------------------------------------------------------------------------
+
+export interface CountersignResult {
+  id: string;
+  cid: string | null;
+  status: 'bilateral';
+}
+
+/**
+ * Countersign a pending attestation — `POST /auth/api/attestations/countersign`.
+ * Transitions the attestation `pending` → `bilateral`. Only the attestation
+ * subject can countersign; the kernel enforces that from the app-auth
+ * bearer token's identity (`actingAttestationId` must be the acting
+ * session's own consent attestation — the same discipline as every other
+ * `fetchKernel` call here, never a value read from process.env).
+ *
+ * `witnessJws` must be built by the caller — see `buildAppWitnessJws`
+ * (src/lib/kernel/auth.ts) for why this app signs it with its own keypair
+ * rather than the subject's chain key.
+ */
+export async function countersignAttestation(
+  attestationId: string,
+  witnessJws: string,
+  actingAttestationId: string,
+): Promise<CountersignResult> {
+  const res = await fetchKernel(
+    '/auth/api/attestations/countersign',
+    { method: 'POST', body: JSON.stringify({ attestationId, witnessJws }) },
+    actingAttestationId,
+  );
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
+    throw new Error(`attestations.countersign failed: ${res.status} ${data.error ?? res.statusText}`);
+  }
+
+  return res.json() as Promise<CountersignResult>;
 }

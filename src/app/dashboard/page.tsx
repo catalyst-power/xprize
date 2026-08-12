@@ -8,7 +8,7 @@
  *
  * Layout (top → bottom):
  *   Header → User card → Connected Services (status only) → Delivery gesture | receipt
- *   → Recent Deliveries (#49) → Attestation
+ *   → Pending Signatures (#74) → Recent Deliveries (#49) → Attestation
  *
  * Connected Services is a live status panel — it never asks the user to
  * configure connector credentials (the app owns those). It must NOT appear
@@ -23,10 +23,12 @@ import { redirect } from 'next/navigation';
 import { getSession } from '@/lib/session';
 import { recentLots, getLotChain, collectRecipientDids, type LotChain, type RecentLot } from '@/lib/supply';
 import { getConnections, type ConnectionEntry } from '@/lib/kernel/identity';
+import { getAttestationsBySubject, type AttestationRecord } from '@/lib/kernel/attestations';
 import { ConnectedServicesPanel } from './ConnectedServicesPanel';
 import { DeliveryGesture } from './DeliveryGesture';
 import { DeliveryReceipt } from './DeliveryReceipt';
 import { ReminderTrigger } from './ReminderTrigger';
+import { PendingSignatures } from './PendingSignatures';
 
 export const dynamic = 'force-dynamic';
 
@@ -175,7 +177,7 @@ export default async function DashboardPage(props: { searchParams: SearchParams 
   // up front, in parallel. Failure on either is non-fatal — the page renders with
   // an empty list/selector on any network/auth error rather than failing the whole
   // dashboard.
-  const [recentLotsList, connections]: [RecentLot[], ConnectionEntry[]] = await Promise.all([
+  const [recentLotsList, connections, pendingAttestations]: [RecentLot[], ConnectionEntry[], AttestationRecord[]] = await Promise.all([
     recentLots(user.did, user.attestationId, 5).catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
       console.error('[dashboard] recentLots fetch failed:', message);
@@ -184,6 +186,14 @@ export default async function DashboardPage(props: { searchParams: SearchParams 
     getConnections(user.attestationId).catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
       console.error('[dashboard] getConnections fetch failed:', message);
+      return [];
+    }),
+    // Pending-signatures inbox (xprize#74) — attestations naming the current
+    // user as *subject* that are awaiting their signature. Non-fatal on
+    // failure, like every other dashboard fetch above.
+    getAttestationsBySubject({ subjectDid: user.did, status: 'pending' }).catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('[dashboard] getAttestationsBySubject fetch failed:', message);
       return [];
     }),
   ]);
@@ -255,6 +265,9 @@ export default async function DashboardPage(props: { searchParams: SearchParams 
               activeRecipientDids={activeRecipientDids}
             />
           )}
+
+        {/* Pending signatures — attestations naming the current user as subject, awaiting their signature (#74) */}
+        <PendingSignatures attestations={pendingAttestations} />
 
         {/* Recent Deliveries — read-only list of the supplier's most recent signed lots (#49) */}
         <RecentDeliveries lots={recentLotsList} />

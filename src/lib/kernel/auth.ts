@@ -13,6 +13,7 @@
 
 import * as ed from '@noble/ed25519';
 import { randomBytes } from 'node:crypto';
+import { SignJWT, importJWK } from 'jose';
 
 const DEFAULT_KERNEL_URL = 'https://imajin.ai';
 const TOKEN_TTL_SECONDS = 600;
@@ -151,6 +152,56 @@ export async function resolveAppAuth(opts: {
   const userDid = payload.sub as string | undefined;
   if (!userDid) throw new Error('Kernel token missing sub claim (userDid)');
   return { token, userDid, scopes };
+}
+
+// ---------------------------------------------------------------------------
+// buildAppWitnessJws — the countersign endpoint's `witnessJws` requirement
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a compact JWS "witnessing" a pending attestation's subject, for the
+ * kernel's `POST /auth/api/attestations/countersign` endpoint
+ * (xprize#74 — pending-signatures inbox).
+ *
+ * That route's schema describes `witnessJws` as "JWS from the subject's
+ * chain key", but AgriFortress never holds a user's private key — users
+ * authenticate to the kernel via their own DID challenge-response, never
+ * handing the app custody of it (AGENTS.md §2/§3). Subject identity for
+ * this call is established the same way every other app-auth call here is:
+ * the bearer token's `sub` claim, which the kernel route resolves via
+ * `requireAuth` and compares against the attestation's `subjectDid` before
+ * accepting the countersign at all (see
+ * apps/kernel/app/auth/api/attestations/countersign/route.ts in
+ * ima-jin/imajin-ai). That route also doesn't verify `witnessJws`
+ * cryptographically yet — an explicit kernel-side TODO, it's stored as
+ * given — so this JWS, signed with the app's own registered keypair
+ * (APP_DID + APP_PRIVATE_KEY), is an honest placeholder for the field: a
+ * witness signature from AgriFortress's own identity, never a substitute
+ * for real subject-chain-key proof.
+ */
+export async function buildAppWitnessJws(opts: {
+  appDid: string;
+  privateKey: string;
+  attestationId: string;
+  subjectDid: string;
+}): Promise<string> {
+  const seed = hexToBytes(opts.privateKey);
+  const publicKey = await ed.getPublicKeyAsync(seed);
+  const key = await importJWK(
+    {
+      kty: 'OKP',
+      crv: 'Ed25519',
+      d: Buffer.from(seed).toString('base64url'),
+      x: Buffer.from(publicKey).toString('base64url'),
+    },
+    'EdDSA',
+  );
+
+  return new SignJWT({ attestationId: opts.attestationId, subjectDid: opts.subjectDid })
+    .setProtectedHeader({ alg: 'EdDSA' })
+    .setIssuedAt()
+    .setIssuer(opts.appDid)
+    .sign(key);
 }
 
 // ---------------------------------------------------------------------------
