@@ -82,10 +82,16 @@ interface ConfirmResponse {
 /**
  * Returns the dashboard receipt URL when the confirm response carries a lot
  * correlationId (`externalId`), or `null` to fall back to the inline panel.
+ *
+ * `inviteFailed` (xprize#77) appends `invite_error=1` so the dashboard page
+ * can surface a small non-blocking note on the receipt — the best-effort
+ * connection invite failing must never look like the delivery itself
+ * failing (claim boundary, AGENTS.md §4), but it also must not be silent.
  */
-export function getReceiptUrl(externalId: string | undefined): string | null {
+export function getReceiptUrl(externalId: string | undefined, inviteFailed = false): string | null {
   if (externalId === undefined || externalId === '') return null;
-  return `/dashboard?lot=${encodeURIComponent(externalId)}`;
+  const suffix = inviteFailed ? '&invite_error=1' : '';
+  return `/dashboard?lot=${encodeURIComponent(externalId)}${suffix}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -341,6 +347,8 @@ const ZERO_CANDIDATE_NOTICE =
 const INVALID_LINES_MESSAGE =
   'Each line needs a product, unit, quantity, and consistent pricing before you can confirm.';
 const MISSING_RECIPIENT_MESSAGE = 'Select a recipient before confirming.';
+const INVITE_FAILED_MESSAGE =
+  'Invite could not be sent \u2014 the delivery was still recorded. Share the invite link with them directly.';
 
 /**
  * A delivery receipt is a claim *about* someone — the recipient DID is the
@@ -409,6 +417,12 @@ interface GestureState {
   captureResponse?: CaptureResponse;
   /** Informational, non-blocking — shown above the fields in the editing phase. */
   notice?: string;
+  /**
+   * Set when the best-effort connection invite (xprize#59) failed to send.
+   * Never blocks or overrides the delivery outcome (claim boundary,
+   * AGENTS.md §4) — only shown as a small non-blocking note (xprize#77).
+   */
+  inviteFailed?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -873,30 +887,38 @@ export function DeliveryGesture({ priorLot, connections = [], activeRecipientDid
     // been active on AgriFortress before, xprize#59's claimable-stub move).
     // Sending the invite is best-effort and secondary: a failed invite send
     // must never look like a failed delivery (claim boundary, AGENTS.md §4),
-    // so errors here are swallowed rather than surfaced as the confirm outcome.
+    // so a failure never overrides the confirm outcome — but it's no longer
+    // silently swallowed either (xprize#77): the server-side route logs it,
+    // and this flags it for a small non-blocking UI note below.
+    let inviteFailed = false;
     if (isRecipientPendingInvite(header.recipient, activeRecipientDidSet)) {
       const recipientConnection = connections.find((c) => c.did === header.recipient);
       try {
-        await fetch('/api/connections/invite', {
+        const inviteRes = await fetch('/api/connections/invite', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             recipientLabel: recipientConnection !== undefined ? connectionLabel(recipientConnection) : undefined,
           }),
         });
-      } catch {
-        // Best-effort — see comment above.
+        if (!inviteRes.ok) {
+          inviteFailed = true;
+          console.error('[DeliveryGesture] Connection invite failed:', inviteRes.status);
+        }
+      } catch (err) {
+        inviteFailed = true;
+        console.error('[DeliveryGesture] Connection invite request failed:', err);
       }
     }
 
-    const receiptUrl = getReceiptUrl(confirm.externalId);
+    const receiptUrl = getReceiptUrl(confirm.externalId, inviteFailed);
     if (receiptUrl !== null) {
       globalThis.location.assign(receiptUrl);
       return;
     }
     // Fallback: no correlationId returned — keep the signed attestationId panel.
     // Never fabricate a receipt when the lot id is absent (claim boundary, AGENTS.md §4).
-    setState({ phase: 'done', attestationId: confirm.attestationId });
+    setState({ phase: 'done', attestationId: confirm.attestationId, inviteFailed });
   }
 
   // --- Reset ---
@@ -917,6 +939,14 @@ export function DeliveryGesture({ priorLot, connections = [], activeRecipientDid
         <p className="text-sm font-medium text-green-400">Delivery recorded</p>
         <p className="text-xs text-zinc-400">Attestation</p>
         <p className="text-xs text-zinc-300 font-mono break-all">{state.attestationId}</p>
+        {state.inviteFailed === true && (
+          <p
+            data-testid="invite-failed-notice"
+            className="text-xs text-amber-300 bg-amber-950/30 border border-amber-800 rounded-lg px-3 py-2"
+          >
+            {INVITE_FAILED_MESSAGE}
+          </p>
+        )}
         <button
           type="button"
           onClick={reset}

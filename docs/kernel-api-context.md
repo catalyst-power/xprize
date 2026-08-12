@@ -20,7 +20,7 @@ The kernel's `requireAppAuth(request, { scope })` validates these and returns:
 
 That triple is your entire authority. The app never holds user credentials directly.
 
-**Scopes used by AgriFortress:** `supply:read`, `supply:write`, `quickbooks:read`, `connections:read`.
+**Scopes used by AgriFortress:** `supply:read`, `supply:write`, `quickbooks:read`, `connections:read`, `connections:write`.
 
 ## Auth callback flow (how users log in to the app)
 
@@ -127,6 +127,27 @@ Response 200: { connections: [{ did, handle, name, nickname, connectedAt }, ...]
   always a real DID. Only the attestation subject can later countersign it via
   `POST /auth/api/attestations/countersign`.
 - See `src/lib/kernel/identity.ts` and `src/app/dashboard/DeliveryGesture.tsx`.
+
+### POST `/connections/api/invites` — create a connections-service invite (xprize#59, #77)
+
+```
+Headers: X-App-DID, X-App-Authorization
+Scope: connections:write
+Body: { delivery: "link" | "email", toEmail?: string, note?: string }
+Response 201: { invite: { id, code, delivery, status }, url: string }
+```
+
+- **ima-jin/imajin-ai#1794** added an app-auth dual guard to this route (previously
+  cookie-session-only, which 401'd on this app's server-side app-auth call — xprize#77).
+  It now accepts `requireAppAuth(request, { scope: 'connections:write' })` first, falling
+  back to the session cookie. No header-shape change was needed on the app side —
+  `fetchKernel` already sent the same Bearer + `X-App-DID` shape every other app-auth
+  route here uses.
+- Called from `createConnectionInvite` (`src/lib/kernel/identity.ts`), best-effort, when
+  the delivery confirm's chosen recipient has never been active on AgriFortress before.
+  A failed invite must never look like a failed delivery (claim boundary, AGENTS.md §4) —
+  it's logged server-side and surfaced as a small non-blocking UI note, never as the
+  confirm outcome.
 
 ## Connector status (app-facing connector surface, #1540)
 

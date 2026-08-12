@@ -93,18 +93,14 @@ export interface CreateInviteResponse {
  * issue: reuse `/connections/api` invite create rather than inventing a new
  * mechanism).
  *
- * KNOWN GAP (documented in a comment on xprize#59, not fixed here): as read
- * in the public ima-jin/imajin-ai repo
- * (apps/kernel/app/connections/api/invites/route.ts), this kernel route
- * authenticates via `getSessionFromCookies` — the human's own kernel web
- * session cookie — not the app-auth Bearer token this client (`fetchKernel`)
- * sends, unlike every other kernel route this app calls (e.g.
- * `/connections/api/connections`, which is `resolveEffectiveDid` /
- * app-auth-gated). Calling it from a server-side app request may 401 until
- * the kernel exposes an app-auth-compatible variant, similar to the already
- * known ima-jin/imajin-ai#1431 gap referenced in `src/lib/inference.ts`.
- * Implemented anyway (forward-compatible; a harmless attempt today) so the
- * app-side seam is ready the moment the kernel supports it.
+ * Previously known gap, now fixed: this kernel route used to authenticate
+ * via `getSessionFromCookies` only, so this server-side app-auth call
+ * (`fetchKernel`) 401'd (xprize#77). ima-jin/imajin-ai#1794 added a dual
+ * guard — `requireAppAuth(request, { scope: 'connections:write' })` first,
+ * falling back to the session cookie — so this call now authenticates the
+ * same way every other kernel route this app calls does (Bearer app token +
+ * `X-App-DID`, both already sent by `fetchKernel`; see `src/lib/kernel/client.ts`).
+ * No header-shape change was needed on this side.
  *
  * `attestationId` must be the acting user's own session attestation.
  */

@@ -366,6 +366,22 @@ describe('getReceiptUrl', () => {
   it('returns null when externalId is an empty string (kernel returned no lot id)', () => {
     expect(getReceiptUrl('')).toBeNull();
   });
+
+  it('does not append invite_error when inviteFailed is omitted (default)', () => {
+    expect(getReceiptUrl('lot_abc123')).toBe('/dashboard?lot=lot_abc123');
+  });
+
+  it('does not append invite_error when inviteFailed is explicitly false', () => {
+    expect(getReceiptUrl('lot_abc123', false)).toBe('/dashboard?lot=lot_abc123');
+  });
+
+  it('appends invite_error=1 when inviteFailed is true (xprize#77)', () => {
+    expect(getReceiptUrl('lot_abc123', true)).toBe('/dashboard?lot=lot_abc123&invite_error=1');
+  });
+
+  it('returns null (never a query string) when externalId is absent, regardless of inviteFailed', () => {
+    expect(getReceiptUrl(undefined, true)).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
