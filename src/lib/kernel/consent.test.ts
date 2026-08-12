@@ -13,8 +13,11 @@ describe('AGRIFORTRESS_SCOPES', () => {
     expect(scopes).toContain('quickbooks:write'); // receiver confirmation writes invoice on supplier's behalf
     expect(scopes).toContain('connectors:read-status'); // Connected Services panel (#1540)
     expect(scopes).toContain('connections:read'); // Recipient DID selector (#55)
+    expect(scopes).toContain('connections:write'); // create connections-service invite (#59, #77, #84)
+    expect(scopes).toContain('chat:write'); // counterparty delivery notification (#73, #84)
+    expect(scopes).toContain('attestations:write'); // countersign a pending receipt (#74, #84)
     expect(scopes).toContain('infer:provide'); // Gemini inference pipeline
-    expect(scopes).toHaveLength(10);
+    expect(scopes).toHaveLength(13);
   });
 });
 
