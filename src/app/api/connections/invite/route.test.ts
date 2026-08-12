@@ -124,4 +124,20 @@ describe('POST /api/connections/invite — kernel failure', () => {
     const body = await res.json() as { error: string };
     expect(body.error).toContain('identity.invites.create failed');
   });
+
+  it('logs the failure server-side instead of swallowing it (xprize#77)', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockGetSession.mockResolvedValue(SESSION_USER);
+    mockCreateInvite.mockRejectedValue(
+      new Error('identity.invites.create failed: 401 Not authenticated'),
+    );
+
+    await POST(makeRequest({}));
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[connections/invite]'),
+      expect.stringContaining('identity.invites.create failed'),
+    );
+    consoleErrorSpy.mockRestore();
+  });
 });

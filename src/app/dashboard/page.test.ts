@@ -20,8 +20,10 @@ import { getConnections, type ConnectionEntry } from '@/lib/kernel/identity';
 import DashboardPage, {
   ConnectErrorBanner,
   connectErrorLabel,
+  InviteErrorNotice,
   RecentDeliveries,
   resolveConnectError,
+  resolveInviteError,
 } from './page';
 import { DeliveryGesture } from './DeliveryGesture';
 
@@ -80,6 +82,28 @@ describe('connectErrorLabel', () => {
 });
 
 // ---------------------------------------------------------------------------
+// resolveInviteError (xprize#77)
+// ---------------------------------------------------------------------------
+
+describe('resolveInviteError', () => {
+  it('is true when invite_error=1 is present', () => {
+    expect(resolveInviteError({ invite_error: '1' })).toBe(true);
+  });
+
+  it('is false when invite_error is absent', () => {
+    expect(resolveInviteError({})).toBe(false);
+  });
+
+  it('is false when invite_error is an array (multi-value query param)', () => {
+    expect(resolveInviteError({ invite_error: ['1', '1'] })).toBe(false);
+  });
+
+  it('is false for any value other than the literal "1"', () => {
+    expect(resolveInviteError({ invite_error: 'true' })).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // DashboardPage — connect-error banner (xprize#46: previously read but never
 // surfaced, so a failed QuickBooks Connect click failed silently)
 // ---------------------------------------------------------------------------
@@ -132,6 +156,30 @@ describe('DashboardPage', () => {
     const element = await DashboardPage({ searchParams: Promise.resolve({}) });
 
     expect(findElementOfType(element, ConnectErrorBanner)).toBeUndefined();
+  });
+
+  it('renders the invite-error notice when invite_error=1 is present (xprize#77)', async () => {
+    mockGetSession.mockResolvedValue(SESSION_USER);
+    mockRecentLots.mockResolvedValue([]);
+    mockGetConnections.mockResolvedValue([]);
+
+    const element = await DashboardPage({
+      searchParams: Promise.resolve({ lot: 'lot_abc123', invite_error: '1' }),
+    });
+
+    const notice = findElementOfType(element, InviteErrorNotice);
+    expect(notice).toBeDefined();
+    expect(notice?.props?.['dismissHref']).toBe('/dashboard?lot=lot_abc123');
+  });
+
+  it('does not render the invite-error notice when invite_error is absent', async () => {
+    mockGetSession.mockResolvedValue(SESSION_USER);
+    mockRecentLots.mockResolvedValue([]);
+    mockGetConnections.mockResolvedValue([]);
+
+    const element = await DashboardPage({ searchParams: Promise.resolve({}) });
+
+    expect(findElementOfType(element, InviteErrorNotice)).toBeUndefined();
   });
 
   it('fetches up to 5 recent lots and passes them to RecentDeliveries (#49)', async () => {

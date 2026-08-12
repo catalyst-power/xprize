@@ -17,11 +17,13 @@
  * Responses:
  *   401  No active session
  *   201  CreateInviteResponse from the kernel
- *   502  Kernel call failed (including the known cookie-vs-Bearer-auth gap
- *        documented on `createConnectionInvite` — surfaces as an honest
- *        error rather than a false "invite sent" claim)
+ *   502  Kernel call failed — logged server-side (never swallowed, xprize#77)
+ *        and surfaced as an honest error rather than a false "invite sent"
+ *        claim. The caller (`DeliveryGesture.tsx`) treats this as best-effort
+ *        and non-blocking for the delivery confirm outcome, but shows a
+ *        small non-blocking UI note when it happens.
  *
- * Issue: catalyst-power/xprize#59
+ * Issue: catalyst-power/xprize#59, catalyst-power/xprize#77
  */
 
 import { NextResponse, type NextRequest } from 'next/server';
@@ -57,6 +59,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(result, { status: 201 });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    // Stop swallowing the error (xprize#77): a failed best-effort invite must
+    // still be visible to operators, even though it never blocks the delivery
+    // confirm outcome (claim boundary, AGENTS.md §4).
+    console.error('[connections/invite] Kernel invite create failed:', message);
     return NextResponse.json({ error: message }, { status: 502 });
   }
 }

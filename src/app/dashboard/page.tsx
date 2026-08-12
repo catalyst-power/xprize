@@ -52,6 +52,19 @@ export function connectErrorLabel(connectError: string): string {
   return connectError === 'quickbooks' ? 'QuickBooks' : connectError;
 }
 
+/**
+ * Read the `invite_error` flag `DeliveryGesture` appends to the receipt
+ * redirect URL when its best-effort connection invite (xprize#59) failed to
+ * send (xprize#77). The delivery itself is unaffected — this is a small
+ * non-blocking note, never a failure of the confirm outcome (claim
+ * boundary, AGENTS.md §4).
+ */
+export function resolveInviteError(
+  searchParams: Record<string, string | string[] | undefined>,
+): boolean {
+  return searchParams['invite_error'] === '1';
+}
+
 // ---------------------------------------------------------------------------
 // Sub-render
 // ---------------------------------------------------------------------------
@@ -74,6 +87,34 @@ export function ConnectErrorBanner(props: Readonly<{ connectError: string }>) {
         href="/dashboard"
         aria-label="Dismiss"
         className="shrink-0 pl-3 text-sm leading-none text-red-400 hover:text-red-200"
+      >
+        ×
+      </a>
+    </div>
+  );
+}
+
+/**
+ * Small, non-blocking note (xprize#77) shown on the receipt when the
+ * best-effort connection invite (xprize#59) failed to send. Dismissing
+ * re-navigates to the same receipt with `invite_error` dropped, rather than
+ * losing the `?lot=` context like the connect-error banner's dismiss does.
+ */
+export function InviteErrorNotice(props: Readonly<{ dismissHref: string }>) {
+  const { dismissHref } = props;
+  return (
+    <div
+      data-testid="invite-error-notice"
+      className="rounded-xl border border-amber-800 bg-amber-950/30 p-4 flex items-start justify-between"
+    >
+      <p className="text-xs text-amber-300">
+        Invite could not be sent — the delivery was still recorded. Share the invite link with
+        the recipient directly.
+      </p>
+      <a
+        href={dismissHref}
+        aria-label="Dismiss"
+        className="shrink-0 pl-3 text-sm leading-none text-amber-300 hover:text-amber-100"
       >
         ×
       </a>
@@ -164,6 +205,8 @@ export default async function DashboardPage(props: { searchParams: SearchParams 
   const rawLot = searchParams['lot'];
   const lotId = typeof rawLot === 'string' ? rawLot : undefined;
   const connectError = resolveConnectError(searchParams);
+  const inviteError = resolveInviteError(searchParams);
+  const receiptDismissHref = lotId !== undefined ? `/dashboard?lot=${encodeURIComponent(lotId)}` : '/dashboard';
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] p-6">
@@ -182,6 +225,9 @@ export default async function DashboardPage(props: { searchParams: SearchParams 
 
         {/* Connect error — surfaced from a connector's connect route redirect (#46) */}
         {connectError !== undefined && <ConnectErrorBanner connectError={connectError} />}
+
+        {/* Invite failed — best-effort connection invite (xprize#59) send failure, non-blocking (xprize#77) */}
+        {inviteError && <InviteErrorNotice dismissHref={receiptDismissHref} />}
 
         {/* User card */}
         <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-5 space-y-1">
