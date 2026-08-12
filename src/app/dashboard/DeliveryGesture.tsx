@@ -15,14 +15,19 @@
  *   3. candidateIntents[0].metadata pre-fills the header + line items — all
  *      fields fully editable (inference = prior, human = authority; AGENTS.md §4)
  *   4. Scott taps "Confirm delivery" → POST /api/inference/confirm/{sessionId}
- *   5. On success: signed attestationId shown. On failure: honest error —
- *      never a phantom receipt (same discipline as #17).
+ *   5. On success: the URL is updated (router.replace) to the lot's persistent
+ *      representation (?lot={correlationId}, also reachable standalone at
+ *      /delivery/{correlationId}) so a refresh keeps the receipt on screen instead
+ *      of remounting this component back to idle (xprize#76). When the kernel
+ *      hasn't resolved a lot id yet, the signed attestationId is shown inline
+ *      instead — never a phantom receipt (same discipline as #17).
  *
  * Voice is the primary path. Photo is evidence; the count is never derived
  * from the image — Scott asserts and signs it (AGENTS.md §4).
  */
 
 import { useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import type { RecentLot } from '@/lib/supply';
 import type {
   CandidateIntent,
@@ -696,6 +701,7 @@ interface DeliveryGestureProps {
 }
 
 export function DeliveryGesture({ priorLot, connections = [], activeRecipientDids = [] }: DeliveryGestureProps) {
+  const router = useRouter();
   const [state, setState] = useState<GestureState>({ phase: 'idle' });
   const activeRecipientDidSet = new Set(activeRecipientDids);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -912,8 +918,12 @@ export function DeliveryGesture({ priorLot, connections = [], activeRecipientDid
     }
 
     const receiptUrl = getReceiptUrl(confirm.externalId, inviteFailed);
+    // Client-side navigation (rather than a hard `location.assign` reload) so the
+    // transition to the persistent receipt view is instant, while still updating
+    // the URL — a refresh on `?lot={correlationId}` re-fetches DeliveryReceipt
+    // server-side instead of remounting this component back to idle (xprize#76).
     if (receiptUrl !== null) {
-      globalThis.location.assign(receiptUrl);
+      router.replace(receiptUrl);
       return;
     }
     // Fallback: no correlationId returned — keep the signed attestationId panel.

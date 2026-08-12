@@ -153,6 +153,25 @@ function findElementOfType(node: unknown, type: unknown): { props?: Record<strin
   return findElementOfType(element.props?.['children'], type);
 }
 
+describe('DeliveryReceipt — permalink (xprize#76)', () => {
+  it('links to the standalone /delivery/{correlationId} route', async () => {
+    mockGetLotChain.mockResolvedValue(MOCK_CHAIN);
+    mockAttemptInvoiceCreation.mockResolvedValue({ state: 'pending-invoice' });
+
+    const element = await DeliveryReceipt({ correlationId: 'lot_abc123', attestationId: 'att-1' });
+
+    function findAnchorHrefs(node: unknown): string[] {
+      if (node === null || node === undefined || typeof node !== 'object') return [];
+      if (Array.isArray(node)) return node.flatMap(findAnchorHrefs);
+      const el = node as { type?: unknown; props?: Record<string, unknown> };
+      const hrefs = el.type === 'a' && typeof el.props?.['href'] === 'string' ? [el.props['href'] as string] : [];
+      return [...hrefs, ...findAnchorHrefs(el.props?.['children'])];
+    }
+
+    expect(findAnchorHrefs(element)).toContain('/delivery/lot_abc123');
+  });
+});
+
 describe('DeliveryReceipt — settlement rendering', () => {
   it('calls attemptInvoiceCreation with the correlationId and attestationId once a receipt exists', async () => {
     mockGetLotChain.mockResolvedValue(MOCK_CHAIN);

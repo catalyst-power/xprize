@@ -8,19 +8,33 @@
  * No retry is safe — the intent is signed exactly once. Honest error on
  * failure; no phantom receipt is ever returned (same discipline as #17).
  *
+ * On success, when the confirmed card named a recipient DID, best-effort
+ * notifies that counterparty via a kernel chat DM linking back to the
+ * pending item (xprize#73). Fire-and-forget: never awaited, never affects
+ * this route's response, failures are logged server-side.
+ *
  * Responses:
  *   401  No active session
  *   200  InferenceConfirmResponse { sessionId, status, attestationId, ... }
  *   502  Kernel call failed
  *
- * Issue: catalyst-power/xprize#5
+ * Issue: catalyst-power/xprize#5, catalyst-power/xprize#73
  */
 
 import { NextResponse, type NextRequest } from 'next/server';
 import { getSession } from '@/lib/session';
 import { confirmInference, type ConfirmIntentBody } from '@/lib/inference';
+import { sendDirectMessage } from '@/lib/kernel/chat';
 
 export const dynamic = 'force-dynamic';
+
+const DEFAULT_APP_URL = 'https://integrity.imajin.ai';
+
+function buildDeliveryNotificationMessage(correlationId: string): string {
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? DEFAULT_APP_URL).replace(/\/$/, '');
+  const deliveryUrl = `${appUrl}/dashboard?lot=${encodeURIComponent(correlationId)}`;
+  return `A delivery attestation is awaiting your signature in AgriFortress: ${deliveryUrl}`;
+}
 
 /**
  * Read the optional confirmed/edited delivery card from the request body.
@@ -54,6 +68,27 @@ export async function POST(
 
   try {
     const result = await confirmInference(sessionId, user.attestationId, body);
+
+    // Counterparty notification (xprize#73) — the attestation is already
+    // signed at this point; a failed DM must never look like a failed
+    // delivery (claim boundary, AGENTS.md §4), so this is fire-and-forget
+    // rather than awaited, and failures are logged server-side (loggable,
+    // not swallowed) instead of surfacing in the response. `body.recipient`
+    // is the same DID the delivery card's Recipient selector resolved
+    // (xprize#55); it's used here rather than re-deriving the subject from
+    // the kernel because `POST /api/inference/confirm` doesn't echo the
+    // signed attestation's subject back (see the known kernel limitation
+    // documented on `ConfirmIntentBody` in src/lib/inference.ts).
+    if (body?.recipient !== undefined && body.recipient !== '' && result.externalId !== '') {
+      sendDirectMessage(
+        body.recipient,
+        buildDeliveryNotificationMessage(result.externalId),
+        user.attestationId,
+      ).catch((err: unknown) => {
+        console.error('[inference/confirm] Counterparty delivery notification failed:', err);
+      });
+    }
+
     return NextResponse.json(result, { status: 200 });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

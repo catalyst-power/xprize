@@ -198,6 +198,13 @@ export async function DeliveryReceipt(
           <p className="text-xs text-zinc-500 font-mono break-all pt-0.5">
             Lot {lot.correlationId}
           </p>
+          {/* Standalone shareable/linkable route (xprize#76) — same receipt, durable URL. */}
+          <a
+            href={`/delivery/${encodeURIComponent(lot.correlationId)}`}
+            className="text-[10px] text-zinc-600 hover:text-zinc-400 underline underline-offset-2"
+          >
+            Permalink
+          </a>
         </div>
         <span className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium text-green-400 border border-green-800 bg-green-950/40 capitalize">
           {lot.status}
