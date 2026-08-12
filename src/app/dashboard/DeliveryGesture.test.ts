@@ -2,11 +2,13 @@ import { describe, it, expect } from 'vitest';
 import {
   applyNotesPriceFallback,
   buildEditingState,
+  emailInviteNotice,
   extractPriceFromNotes,
   getReceiptUrl,
   hasRecipient,
   InferenceDebugPanel,
   inviteNoticeForRecipient,
+  isInvitingByEmail,
   isRecipientPendingInvite,
   noActiveConnectionsNotice,
   resolveHeaderFields,
@@ -341,6 +343,64 @@ describe('hasRecipient', () => {
 
   it('is true once a connection DID is selected', () => {
     expect(hasRecipient({ recipient: 'did:imajin:david', lot: '', notes: '' })).toBe(true);
+  });
+
+  it('is true when a well-formed recipientEmail is entered instead of a connection (xprize#86)', () => {
+    expect(hasRecipient({ recipient: '', lot: '', notes: '', recipientEmail: 'david@graceharbour.farm' })).toBe(true);
+  });
+
+  it('is false when recipientEmail is malformed and no connection is selected', () => {
+    expect(hasRecipient({ recipient: '', lot: '', notes: '', recipientEmail: 'not-an-email' })).toBe(false);
+  });
+
+  it('is false when recipientEmail is absent (backward compatible with pre-xprize#86 literals)', () => {
+    expect(hasRecipient({ recipient: '', lot: '', notes: '' })).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isInvitingByEmail / emailInviteNotice (xprize#86)
+// ---------------------------------------------------------------------------
+
+describe('isInvitingByEmail', () => {
+  it('is true when recipient is empty and recipientEmail is a well-formed address', () => {
+    expect(isInvitingByEmail({ recipient: '', lot: '', notes: '', recipientEmail: 'david@graceharbour.farm' })).toBe(true);
+  });
+
+  it('is false when a connection DID is selected, even if recipientEmail also happens to be set', () => {
+    expect(
+      isInvitingByEmail({
+        recipient: 'did:imajin:david',
+        lot: '',
+        notes: '',
+        recipientEmail: 'david@graceharbour.farm',
+      }),
+    ).toBe(false);
+  });
+
+  it('is false when recipientEmail is malformed', () => {
+    expect(isInvitingByEmail({ recipient: '', lot: '', notes: '', recipientEmail: 'not-an-email' })).toBe(false);
+  });
+
+  it('is false when recipientEmail is absent', () => {
+    expect(isInvitingByEmail({ recipient: '', lot: '', notes: '' })).toBe(false);
+  });
+});
+
+describe('emailInviteNotice', () => {
+  it('returns undefined for an undefined email', () => {
+    expect(emailInviteNotice(undefined)).toBeUndefined();
+  });
+
+  it('returns undefined for a malformed email', () => {
+    expect(emailInviteNotice('not-an-email')).toBeUndefined();
+  });
+
+  it('returns an "invite will be emailed" notice naming the address for a well-formed email', () => {
+    const notice = emailInviteNotice('david@graceharbour.farm');
+    expect(notice).toBeDefined();
+    expect(notice).toMatch(/emailed/i);
+    expect(notice).toContain('david@graceharbour.farm');
   });
 });
 

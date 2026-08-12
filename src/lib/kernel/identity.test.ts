@@ -154,3 +154,128 @@ describe('createConnectionInvite', () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// createConnectionInvite — email + invite-context fields (xprize#86)
+// ---------------------------------------------------------------------------
+
+const EMAIL_INVITE_RESPONSE = {
+  invite: {
+    id: 'inv_2',
+    code: 'def456',
+    delivery: 'email' as const,
+    status: 'pending',
+    toDid: 'did:imajin:new-stub',
+  },
+  url: 'https://connections.imajin.ai/invite/did:imajin:scott/def456',
+};
+
+function badRequestResponse(error = 'Unknown scopeDid') {
+  return Promise.resolve({
+    ok: false,
+    status: 400,
+    statusText: 'Bad Request',
+    json: () => Promise.resolve({ error }),
+  } as Response);
+}
+
+describe('createConnectionInvite — email + context fields', () => {
+  it('sends toEmail, scopeDid, and pendingAttestationId when provided', async () => {
+    mockFetchKernel.mockReturnValue(okResponse(EMAIL_INVITE_RESPONSE));
+
+    await createConnectionInvite(
+      {
+        delivery: 'email',
+        toEmail: 'david@graceharbour.farm',
+        scopeDid: 'did:imajin:agrifortress-org',
+        pendingAttestationId: 'att_pending123',
+      },
+      'att-scott-123',
+    );
+
+    const [, opts] = mockFetchKernel.mock.calls[0];
+    expect(JSON.parse(opts?.body as string)).toEqual({
+      delivery: 'email',
+      toEmail: 'david@graceharbour.farm',
+      scopeDid: 'did:imajin:agrifortress-org',
+      pendingAttestationId: 'att_pending123',
+    });
+  });
+
+  it('returns the resolved/minted toDid on success, without inspecting or branching on it', async () => {
+    mockFetchKernel.mockReturnValue(okResponse(EMAIL_INVITE_RESPONSE));
+
+    const result = await createConnectionInvite(
+      { delivery: 'email', toEmail: 'david@graceharbour.farm' },
+      'att-scott-123',
+    );
+
+    expect(result.invite.toDid).toBe('did:imajin:new-stub');
+  });
+
+  it('retries once without scopeDid/pendingAttestationId when the kernel rejects the context-bearing request with 400', async () => {
+    mockFetchKernel
+      .mockReturnValueOnce(badRequestResponse())
+      .mockReturnValueOnce(okResponse(EMAIL_INVITE_RESPONSE));
+
+    const result = await createConnectionInvite(
+      {
+        delivery: 'email',
+        toEmail: 'david@graceharbour.farm',
+        scopeDid: 'did:imajin:agrifortress-org',
+        pendingAttestationId: 'att_pending123',
+      },
+      'att-scott-123',
+    );
+
+    expect(mockFetchKernel).toHaveBeenCalledTimes(2);
+    const [, secondOpts] = mockFetchKernel.mock.calls[1];
+    expect(JSON.parse(secondOpts?.body as string)).toEqual({
+      delivery: 'email',
+      toEmail: 'david@graceharbour.farm',
+    });
+    expect(result.invite.toDid).toBe('did:imajin:new-stub');
+  });
+
+  it('does not retry a 400 when no context fields were sent (graceful-degradation retry is scoped to context requests only)', async () => {
+    mockFetchKernel.mockReturnValue(badRequestResponse('Invalid email'));
+
+    await expect(
+      createConnectionInvite({ delivery: 'email', toEmail: 'not-an-email' }, 'att-scott-123'),
+    ).rejects.toThrow('identity.invites.create failed: 400');
+    expect(mockFetchKernel).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry a non-400 error even when context fields were sent', async () => {
+    mockFetchKernel.mockReturnValue(
+      Promise.resolve({
+        ok: false,
+        status: 502,
+        statusText: 'Bad Gateway',
+        json: () => Promise.resolve({ error: 'upstream error' }),
+      } as Response),
+    );
+
+    await expect(
+      createConnectionInvite(
+        { delivery: 'email', toEmail: 'david@graceharbour.farm', scopeDid: 'did:imajin:agrifortress-org' },
+        'att-scott-123',
+      ),
+    ).rejects.toThrow('identity.invites.create failed: 502');
+    expect(mockFetchKernel).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces the error from the retried context-less request when it also fails', async () => {
+    mockFetchKernel
+      .mockReturnValueOnce(badRequestResponse())
+      .mockReturnValueOnce(badRequestResponse('still bad'));
+
+    await expect(
+      createConnectionInvite(
+        { delivery: 'email', toEmail: 'david@graceharbour.farm', scopeDid: 'did:imajin:agrifortress-org' },
+        'att-scott-123',
+      ),
+    ).rejects.toThrow('identity.invites.create failed: 400');
+    expect(mockFetchKernel).toHaveBeenCalledTimes(2);
+  });
+});
