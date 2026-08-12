@@ -20,7 +20,8 @@ The kernel's `requireAppAuth(request, { scope })` validates these and returns:
 
 That triple is your entire authority. The app never holds user credentials directly.
 
-**Scopes used by AgriFortress:** `supply:read`, `supply:write`, `quickbooks:read`, `connections:read`, `connections:write`.
+**Scopes used by AgriFortress:** `supply:read`, `supply:write`, `quickbooks:read`, `connections:read`,
+`connections:write`, `chat:write`, `attestations:write`.
 
 ## Auth callback flow (how users log in to the app)
 

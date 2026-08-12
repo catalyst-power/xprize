@@ -26,6 +26,13 @@ const DEFAULT_KERNEL_URL = 'https://imajin.ai';
  *                            Connected Services panel)
  * connections:read         — trust-graph connections for the delivery card's
  *                            Recipient DID selector (xprize#55)
+ * connections:write        — create a connections-service invite when the chosen
+ *                            recipient has never been active on AgriFortress before
+ *                            (xprize#59, #77, #84)
+ * chat:write               — send the counterparty-notification direct message on
+ *                            delivery confirm (xprize#73, #84)
+ * attestations:write       — countersign a pending delivery receipt from the
+ *                            Pending Signatures inbox (xprize#74, #84)
  * infer:provide            — provide app-owned inference credentials for delegated
  *                            inference (Gemini voice/photo → intent pipeline)
  */
@@ -39,6 +46,9 @@ export const AGRIFORTRESS_SCOPES = [
   'quickbooks:write',
   'connectors:read-status',
   'connections:read',
+  'connections:write',
+  'chat:write',
+  'attestations:write',
   'infer:provide',
 ] as const;
 
