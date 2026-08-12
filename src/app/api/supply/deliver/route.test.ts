@@ -137,6 +137,38 @@ describe('POST /api/supply/deliver — success', () => {
       SESSION_USER.attestationId,
     );
   });
+
+  // ---------------------------------------------------------------------------
+  // recipientDid (ima-jin/imajin-ai#1820/#1821) — forwarded as-is; actual
+  // DID validation/sanitization is `confirmDelivery`'s job (src/lib/supply.ts),
+  // exercised in supply.test.ts, not duplicated here.
+  // ---------------------------------------------------------------------------
+
+  it('forwards recipientDid to the received call when provided', async () => {
+    mockGetSession.mockResolvedValue(SESSION_USER);
+    mockDeclare.mockResolvedValue(DECLARED);
+    mockConfirm.mockResolvedValue(RECEIVED);
+
+    await POST(
+      makeRequest({ commodity: 'eggs', quantity: 6, unit: 'dozen', recipientDid: 'did:imajin:david' }),
+    );
+
+    expect(mockConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({ recipientDid: 'did:imajin:david' }),
+      SESSION_USER.attestationId,
+    );
+  });
+
+  it('does not include recipientDid in the received call when absent from the request', async () => {
+    mockGetSession.mockResolvedValue(SESSION_USER);
+    mockDeclare.mockResolvedValue(DECLARED);
+    mockConfirm.mockResolvedValue(RECEIVED);
+
+    await POST(makeRequest({ commodity: 'eggs', quantity: 6, unit: 'dozen' }));
+
+    const [sentBody] = mockConfirm.mock.calls[0];
+    expect('recipientDid' in sentBody).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------

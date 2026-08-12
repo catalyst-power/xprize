@@ -14,6 +14,7 @@
  */
 
 import { fetchKernel, fetchKernelAsSelf } from './kernel/client';
+import { looksLikeDid } from './reminders';
 
 // ---------------------------------------------------------------------------
 // Request / response types
@@ -32,6 +33,33 @@ export interface SupplyReceivedRequest {
   unit: string;
   /** Optional provenance link to the declared stage's content-addressed record. */
   priorCid?: string;
+  /**
+   * The counterparty DID being asked to countersign this delivery —
+   * additive `recipientDid` field on `POST /supply/api/received`
+   * (ima-jin/imajin-ai#1820/#1821). When supplied, the kernel names the
+   * caller (`userDid`) as issuer and this DID as subject, and its bus
+   * reactor best-effort-notifies the recipient (email/in-app, preference
+   * gated) with a deep link to countersign. Omitted = today's self-attested
+   * behavior (`issuer === subject`), unchanged.
+   *
+   * Additive and backward-compatible: sending this to a kernel that hasn't
+   * deployed #1821 yet is a no-op (extra JSON body fields are ignored), so
+   * this is safe to ship ahead of that kernel PR merging.
+   *
+   * `confirmDelivery` only forwards this when it looks like a real DID
+   * (`looksLikeDid`, src/lib/reminders.ts — the same guard the reminder
+   * ladder uses) — never an empty string or a free-text placeholder for an
+   * unclaimed recipient stub. The kernel falls back cleanly to a
+   * self-attested receipt when the field is absent.
+   *
+   * Note: `originUrl` is deliberately NOT threaded through this call.
+   * Per the #1821 diff, `publishReceiptStage()` (the handler for this
+   * route) never reads an `originUrl` body field — that threading only
+   * exists on the kernel's internal, server-to-server attestation-creation
+   * path (`emitAttestation()` → `attestations/internal`), which this app
+   * never calls directly. Sending it here would just be a dropped field.
+   */
+  recipientDid?: string;
 }
 
 export interface SupplyStageResponse {
@@ -257,9 +285,15 @@ export async function confirmDelivery(
   body: SupplyReceivedRequest,
   attestationId: string,
 ): Promise<SupplyStageResponse> {
+  // #1820/#1821 — never forward a blank or non-DID recipientDid: an absent
+  // field is the kernel's documented signal to fall back to a self-attested
+  // receipt, whereas an empty string would be a garbage subject.
+  const { recipientDid, ...rest } = body;
+  const outgoing = looksLikeDid(recipientDid) ? { ...rest, recipientDid } : rest;
+
   const res = await fetchKernel(
     '/supply/api/received',
-    { method: 'POST', body: JSON.stringify(body) },
+    { method: 'POST', body: JSON.stringify(outgoing) },
     attestationId,
   );
 

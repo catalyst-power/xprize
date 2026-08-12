@@ -254,6 +254,82 @@ describe('confirmDelivery', () => {
     expect('priorCid' in sent).toBe(false);
   });
 
+  // -------------------------------------------------------------------------
+  // recipientDid (ima-jin/imajin-ai#1820/#1821) — additive counterparty
+  // pending-signature notification field. See the doc comment on
+  // `SupplyReceivedRequest` for the full contract.
+  // -------------------------------------------------------------------------
+
+  it('includes recipientDid in the body when it looks like a real DID', async () => {
+    mockFetch.mockReturnValue(okResponse(RECEIVED_RESPONSE));
+
+    await confirmDelivery(
+      {
+        lotId: 'lot_abc123',
+        commodity: 'eggs',
+        quantity: 6,
+        unit: 'dozen',
+        recipientDid: 'did:imajin:david',
+      },
+      'att-scott-123',
+    );
+
+    const [, opts] = mockFetch.mock.calls[0];
+    const sent = JSON.parse(opts?.body as string) as Record<string, unknown>;
+    expect(sent.recipientDid).toBe('did:imajin:david');
+  });
+
+  it('omits recipientDid when not provided', async () => {
+    mockFetch.mockReturnValue(okResponse(RECEIVED_RESPONSE));
+
+    await confirmDelivery(
+      { lotId: 'lot_abc123', commodity: 'eggs', quantity: 6, unit: 'dozen' },
+      'att-scott-123',
+    );
+
+    const [, opts] = mockFetch.mock.calls[0];
+    const sent = JSON.parse(opts?.body as string) as Record<string, unknown>;
+    expect('recipientDid' in sent).toBe(false);
+  });
+
+  it('omits recipientDid rather than sending an empty string (e.g. an unresolved/unclaimed recipient)', async () => {
+    mockFetch.mockReturnValue(okResponse(RECEIVED_RESPONSE));
+
+    await confirmDelivery(
+      {
+        lotId: 'lot_abc123',
+        commodity: 'eggs',
+        quantity: 6,
+        unit: 'dozen',
+        recipientDid: '',
+      },
+      'att-scott-123',
+    );
+
+    const [, opts] = mockFetch.mock.calls[0];
+    const sent = JSON.parse(opts?.body as string) as Record<string, unknown>;
+    expect('recipientDid' in sent).toBe(false);
+  });
+
+  it('omits recipientDid when it does not look like a DID (e.g. a free-text name)', async () => {
+    mockFetch.mockReturnValue(okResponse(RECEIVED_RESPONSE));
+
+    await confirmDelivery(
+      {
+        lotId: 'lot_abc123',
+        commodity: 'eggs',
+        quantity: 6,
+        unit: 'dozen',
+        recipientDid: 'Grace Harbour Farms',
+      },
+      'att-scott-123',
+    );
+
+    const [, opts] = mockFetch.mock.calls[0];
+    const sent = JSON.parse(opts?.body as string) as Record<string, unknown>;
+    expect('recipientDid' in sent).toBe(false);
+  });
+
   it('returns the parsed SupplyStageResponse on success', async () => {
     mockFetch.mockReturnValue(okResponse(RECEIVED_RESPONSE));
 
