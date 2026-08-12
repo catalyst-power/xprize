@@ -108,6 +108,125 @@ describe('POST /api/connections/invite — success', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Email invite path (xprize#86)
+// ---------------------------------------------------------------------------
+
+const EMAIL_INVITE_RESPONSE = {
+  invite: { id: 'inv_2', code: 'def456', delivery: 'email' as const, status: 'pending', toDid: 'did:imajin:new-stub' },
+  url: 'https://connections.imajin.ai/invite/did:imajin:scott/def456',
+};
+
+describe('POST /api/connections/invite — email path (xprize#86)', () => {
+  const ORIGINAL_APP_DID = process.env.APP_DID;
+
+  afterEach(() => {
+    if (ORIGINAL_APP_DID === undefined) {
+      delete process.env.APP_DID;
+    } else {
+      process.env.APP_DID = ORIGINAL_APP_DID;
+    }
+  });
+
+  it('returns 400 for a malformed email, without calling the kernel', async () => {
+    mockGetSession.mockResolvedValue(SESSION_USER);
+
+    const res = await POST(makeRequest({ toEmail: 'not-an-email' }));
+
+    expect(res.status).toBe(400);
+    expect(mockCreateInvite).not.toHaveBeenCalled();
+  });
+
+  it('sends delivery: "email" with the trimmed toEmail when a valid address is provided', async () => {
+    mockGetSession.mockResolvedValue(SESSION_USER);
+    mockCreateInvite.mockResolvedValue(EMAIL_INVITE_RESPONSE);
+
+    await POST(makeRequest({ toEmail: '  david@graceharbour.farm  ' }));
+
+    const [sentBody] = mockCreateInvite.mock.calls[0];
+    expect(sentBody).toMatchObject({ delivery: 'email', toEmail: 'david@graceharbour.farm' });
+  });
+
+  it('passes pendingAttestationId through unchanged when provided', async () => {
+    mockGetSession.mockResolvedValue(SESSION_USER);
+    mockCreateInvite.mockResolvedValue(EMAIL_INVITE_RESPONSE);
+
+    await POST(makeRequest({ toEmail: 'david@graceharbour.farm', pendingAttestationId: 'att_pending123' }));
+
+    const [sentBody] = mockCreateInvite.mock.calls[0];
+    expect(sentBody.pendingAttestationId).toBe('att_pending123');
+  });
+
+  it('omits pendingAttestationId when not provided', async () => {
+    mockGetSession.mockResolvedValue(SESSION_USER);
+    mockCreateInvite.mockResolvedValue(EMAIL_INVITE_RESPONSE);
+
+    await POST(makeRequest({ toEmail: 'david@graceharbour.farm' }));
+
+    const [sentBody] = mockCreateInvite.mock.calls[0];
+    expect(sentBody.pendingAttestationId).toBeUndefined();
+  });
+
+  it('resolves scopeDid from APP_DID (the same org-identity source used elsewhere) when configured', async () => {
+    process.env.APP_DID = 'did:imajin:agrifortress-org';
+    mockGetSession.mockResolvedValue(SESSION_USER);
+    mockCreateInvite.mockResolvedValue(EMAIL_INVITE_RESPONSE);
+
+    await POST(makeRequest({ toEmail: 'david@graceharbour.farm' }));
+
+    const [sentBody] = mockCreateInvite.mock.calls[0];
+    expect(sentBody.scopeDid).toBe('did:imajin:agrifortress-org');
+  });
+
+  it('omits scopeDid when APP_DID is not configured, rather than sending an empty/undefined value', async () => {
+    delete process.env.APP_DID;
+    mockGetSession.mockResolvedValue(SESSION_USER);
+    mockCreateInvite.mockResolvedValue(EMAIL_INVITE_RESPONSE);
+
+    await POST(makeRequest({ toEmail: 'david@graceharbour.farm' }));
+
+    const [sentBody] = mockCreateInvite.mock.calls[0];
+    expect(sentBody.scopeDid).toBeUndefined();
+  });
+
+  it('never accepts a client-supplied scopeDid — only APP_DID is trusted', async () => {
+    process.env.APP_DID = 'did:imajin:agrifortress-org';
+    mockGetSession.mockResolvedValue(SESSION_USER);
+    mockCreateInvite.mockResolvedValue(EMAIL_INVITE_RESPONSE);
+
+    await POST(makeRequest({ toEmail: 'david@graceharbour.farm', scopeDid: 'did:imajin:attacker-supplied' }));
+
+    const [sentBody] = mockCreateInvite.mock.calls[0];
+    expect(sentBody.scopeDid).toBe('did:imajin:agrifortress-org');
+  });
+
+  it('returns the kernel response verbatim, including toDid, without adding any "already exists" signal', async () => {
+    mockGetSession.mockResolvedValue(SESSION_USER);
+    mockCreateInvite.mockResolvedValue(EMAIL_INVITE_RESPONSE);
+
+    const res = await POST(makeRequest({ toEmail: 'david@graceharbour.farm' }));
+
+    expect(res.status).toBe(201);
+    const body = await res.json() as typeof EMAIL_INVITE_RESPONSE;
+    expect(body).toEqual(EMAIL_INVITE_RESPONSE);
+    expect(Object.keys(body)).not.toContain('alreadyExists');
+  });
+
+  it('behaves identically for a response representing a brand-new stub vs. a silently-accrued repeat email (no-disclosure invariant)', async () => {
+    mockGetSession.mockResolvedValue(SESSION_USER);
+    mockCreateInvite.mockResolvedValue(EMAIL_INVITE_RESPONSE);
+    const firstRes = await POST(makeRequest({ toEmail: 'brand-new@graceharbour.farm' }));
+    const firstBody = await firstRes.json() as typeof EMAIL_INVITE_RESPONSE;
+
+    mockCreateInvite.mockResolvedValue({ ...EMAIL_INVITE_RESPONSE, invite: { ...EMAIL_INVITE_RESPONSE.invite, id: 'inv_3', code: 'ghi789' } });
+    const secondRes = await POST(makeRequest({ toEmail: 'repeat@graceharbour.farm' }));
+    const secondBody = await secondRes.json() as typeof EMAIL_INVITE_RESPONSE;
+
+    expect(Object.keys(firstBody.invite).sort()).toEqual(Object.keys(secondBody.invite).sort());
+    expect(firstRes.status).toBe(secondRes.status);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Kernel failure
 // ---------------------------------------------------------------------------
 

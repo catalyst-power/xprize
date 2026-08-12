@@ -74,16 +74,47 @@ export function connectionLabel(connection: ConnectionEntry): string {
 // ---------------------------------------------------------------------------
 
 export interface CreateInviteRequest {
-  /** 'link' is always available; 'email' additionally requires a hard DID + trust-graph membership on the kernel side. */
+  /** 'link' is always available; 'email' requires `toEmail` (xprize#86 — a brand-new email now mints a claimable stub DID, ima-jin/imajin-ai PR #1836). */
   delivery: 'link' | 'email';
-  /** Required when delivery is 'email'. The app has no email address for a trust-graph connection today (ConnectionEntry carries none), so this is currently unused — see xprize#59 PR notes. */
+  /** Required when delivery is 'email'. */
   toEmail?: string;
   /** Free-text context carried on the invite row — the only context-carrying field the kernel invite API exposes today (no query-param/deep-link slot; see xprize#59 PR notes). */
   note?: string;
+  /**
+   * The AgriFortress org DID to scope onboarding into (xprize#86,
+   * ima-jin/imajin-ai PR #1837 — "Phase 2 of #1834"). Optional and
+   * additive so this call stays backward compatible with a kernel that
+   * hasn't deployed migration 0094 yet — see `createConnectionInvite`'s
+   * fallback behavior below.
+   */
+  scopeDid?: string;
+  /**
+   * The delivery attestation this invite should resolve to once the
+   * bilateral claim ratchet closes (same PR). The kernel validates it
+   * references an existing, still-`pending` attestation that this
+   * invite's sender is a party to (issuer or subject) — callers must only
+   * ever pass the ID of an attestation already created by the acting
+   * supplier, i.e. the attestation must exist before this call (xprize#86).
+   */
+  pendingAttestationId?: string;
 }
 
 export interface CreateInviteResponse {
-  invite: { id: string; code: string; delivery: 'link' | 'email'; status: string };
+  invite: {
+    id: string;
+    code: string;
+    delivery: 'link' | 'email';
+    status: string;
+    /**
+     * The resolved/minted recipient DID for an email invite (ima-jin/imajin-ai
+     * PR #1836). A brand-new email mints a fresh claimable-stub DID; a
+     * repeat email silently resolves to its existing stub — the response
+     * shape is identical either way (match-without-disclosure per the
+     * kernel's design), so callers must never branch on whether this DID
+     * looks "new" vs "existing".
+     */
+    toDid?: string;
+  };
   /** Shareable invite URL, e.g. `{connectionsBaseUrl}/invite/{did}/{code}`. */
   url: string;
 }
@@ -108,12 +139,33 @@ export async function createConnectionInvite(
   body: CreateInviteRequest,
   attestationId: string,
 ): Promise<CreateInviteResponse> {
-  const res = await fetchKernel(
-    INVITES_PATH,
-    { method: 'POST', body: JSON.stringify(body) },
-    attestationId,
-  );
+  const hasContext = body.scopeDid !== undefined || body.pendingAttestationId !== undefined;
+  const res = await postInvite(body, attestationId);
 
+  // Graceful degradation (xprize#86): `scopeDid`/`pendingAttestationId` are
+  // additive kernel fields (ima-jin/imajin-ai PR #1837, migrations 0093 +
+  // 0094) that may not be deployed to this kernel yet, or may be
+  // individually rejected (e.g. an unrecognized `scopeDid`) with a 400.
+  // Either way the invite itself is still worth sending, so a 400 response
+  // to a context-bearing request is retried once with the context fields
+  // stripped rather than failing the invite outright.
+  if (!res.ok && res.status === 400 && hasContext) {
+    return parseInviteResponse(await postInvite(stripInviteContext(body), attestationId));
+  }
+
+  return parseInviteResponse(res);
+}
+
+function postInvite(body: CreateInviteRequest, attestationId: string): Promise<Response> {
+  return fetchKernel(INVITES_PATH, { method: 'POST', body: JSON.stringify(body) }, attestationId);
+}
+
+/** Drops `scopeDid`/`pendingAttestationId` for the context-less fallback request. */
+function stripInviteContext(body: CreateInviteRequest): CreateInviteRequest {
+  return { delivery: body.delivery, toEmail: body.toEmail, note: body.note };
+}
+
+async function parseInviteResponse(res: Response): Promise<CreateInviteResponse> {
   if (!res.ok) {
     const data = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
     throw new Error(`identity.invites.create failed: ${res.status} ${data.error ?? res.statusText}`);

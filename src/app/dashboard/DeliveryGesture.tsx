@@ -36,6 +36,7 @@ import type {
   IntentMetadata,
 } from '@/lib/inference';
 import { connectionLabel, type ConnectionEntry } from '@/lib/kernel/identity';
+import { isValidRecipientEmail } from '@/lib/recipientEmail';
 import {
   applyQtyEdit,
   applyTotalEdit,
@@ -108,9 +109,17 @@ export interface DeliveryHeaderFields {
   recipient: string;
   lot: string;
   notes: string;
+  /**
+   * A free-form email address for inviting someone who isn't on Imajin at
+   * all (xprize#86), mutually exclusive with `recipient` — selecting a
+   * connection clears this, and typing an email clears `recipient`.
+   * Optional (rather than required, defaulting to '') so every existing
+   * `DeliveryHeaderFields` literal predating xprize#86 stays valid.
+   */
+  recipientEmail?: string;
 }
 
-const EMPTY_HEADER_FIELDS: DeliveryHeaderFields = { recipient: '', lot: '', notes: '' };
+const EMPTY_HEADER_FIELDS: DeliveryHeaderFields = { recipient: '', lot: '', notes: '', recipientEmail: '' };
 
 /**
  * Resolve an inferred recipient string (a free-text name Gemini transcribed,
@@ -203,6 +212,19 @@ export function noActiveConnectionsNotice(
   if (connections.length === 0) return undefined;
   const anyActive = connections.some((connection) => activeRecipientDids.has(connection.did));
   return anyActive ? undefined : NO_ACTIVE_CONNECTIONS_NOTICE;
+}
+
+// ---------------------------------------------------------------------------
+// Free-form email recipient (xprize#86) — inviting someone who isn't on
+// Imajin at all. Kept to a single notice + validation, matching the
+// never-slower-than-texting friction bar: typing an email and confirming
+// is the whole flow, no extra modal ceremony.
+// ---------------------------------------------------------------------------
+
+/** "Invite will be emailed" notice for a well-formed free-form email recipient, or undefined otherwise. */
+export function emailInviteNotice(recipientEmail: string | undefined): string | undefined {
+  if (!isValidRecipientEmail(recipientEmail)) return undefined;
+  return `An invite will be emailed to ${(recipientEmail ?? '').trim()} to countersign this delivery.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -358,10 +380,17 @@ const INVITE_FAILED_MESSAGE =
 /**
  * A delivery receipt is a claim *about* someone — the recipient DID is the
  * attestation's subject. Without one there is nothing to sign against, so the
- * confirm gesture stays disabled until a recipient is chosen (xprize#65).
+ * confirm gesture stays disabled until a recipient is chosen (xprize#65),
+ * OR a well-formed free-form email is entered instead (xprize#86: inviting
+ * someone who isn't on Imajin at all).
  */
 export function hasRecipient(header: DeliveryHeaderFields): boolean {
-  return header.recipient.trim() !== '';
+  return header.recipient.trim() !== '' || isValidRecipientEmail(header.recipientEmail);
+}
+
+/** True when the header names an email recipient rather than a trust-graph connection (xprize#86). */
+export function isInvitingByEmail(header: DeliveryHeaderFields): boolean {
+  return header.recipient.trim() === '' && isValidRecipientEmail(header.recipientEmail);
 }
 
 type CaptureOutcome =
@@ -805,6 +834,20 @@ export function DeliveryGesture({ priorLot, connections = [], activeRecipientDid
     setState({ ...state, header: { ...state.header, [key]: value } });
   }
 
+  // recipient (connection DID) and recipientEmail (xprize#86) are mutually
+  // exclusive on the card — picking one clears the other so a stale value
+  // from the previously chosen path can never sneak into the confirm call.
+
+  function updateRecipientDid(did: string): void {
+    if (state.phase !== 'editing' || state.header === undefined) return;
+    setState({ ...state, header: { ...state.header, recipient: did, recipientEmail: '' } });
+  }
+
+  function updateRecipientEmail(email: string): void {
+    if (state.phase !== 'editing' || state.header === undefined) return;
+    setState({ ...state, header: { ...state.header, recipient: '', recipientEmail: email } });
+  }
+
   // --- Editing: line items ---
 
   function updateLine(key: string, updater: (line: DeliveryLineDraft) => DeliveryLineDraft): void {
@@ -915,6 +958,32 @@ export function DeliveryGesture({ priorLot, connections = [], activeRecipientDid
         inviteFailed = true;
         console.error('[DeliveryGesture] Connection invite request failed:', err);
       }
+    } else if (isInvitingByEmail(header)) {
+      // xprize#86: someone not on Imajin at all. The delivery attestation
+      // above is already signed (pending) before this call — the kernel's
+      // invite-create validates `pendingAttestationId` against an existing
+      // attestation the inviter is a party to, so this must run *after*
+      // `confirm` resolves, never before. Best-effort and non-blocking, same
+      // discipline as the known-connection branch above (AGENTS.md §4): a
+      // failed invite send never fails the delivery itself.
+      const recipientEmail = (header.recipientEmail ?? '').trim();
+      try {
+        const inviteRes = await fetch('/api/connections/invite', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            toEmail: recipientEmail,
+            pendingAttestationId: confirm.attestationId,
+          }),
+        });
+        if (!inviteRes.ok) {
+          inviteFailed = true;
+          console.error('[DeliveryGesture] Email invite failed:', inviteRes.status);
+        }
+      } catch (err) {
+        inviteFailed = true;
+        console.error('[DeliveryGesture] Email invite request failed:', err);
+      }
     }
 
     const receiptUrl = getReceiptUrl(confirm.externalId, inviteFailed);
@@ -1017,7 +1086,7 @@ export function DeliveryGesture({ priorLot, connections = [], activeRecipientDid
                 connections={connections}
                 activeRecipientDids={activeRecipientDidSet}
                 disabled={isSubmitting}
-                onChange={(did) => updateHeaderField('recipient', did)}
+                onChange={(did) => updateRecipientDid(did)}
               />
               {noActiveConnectionsNotice(connections, activeRecipientDidSet) !== undefined && (
                 <p className="text-xs text-zinc-500">
@@ -1030,6 +1099,30 @@ export function DeliveryGesture({ priorLot, connections = [], activeRecipientDid
                   className="text-xs text-amber-300 bg-amber-950/30 border border-amber-800 rounded-lg px-3 py-2"
                 >
                   {inviteNoticeForRecipient(header.recipient, activeRecipientDidSet)}
+                </p>
+              )}
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-zinc-400">Or invite by email</label>
+              <input
+                type="email"
+                placeholder="name@example.com"
+                value={header.recipientEmail ?? ''}
+                onChange={(e) => updateRecipientEmail(e.target.value)}
+                disabled={isSubmitting}
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white placeholder:text-zinc-600 focus:border-zinc-500 focus:outline-none disabled:opacity-50"
+              />
+              {(header.recipientEmail ?? '').trim() !== '' && !isValidRecipientEmail(header.recipientEmail) && (
+                <p data-testid="invalid-email-notice" className="text-xs text-red-400">
+                  Enter a valid email address.
+                </p>
+              )}
+              {emailInviteNotice(header.recipientEmail) !== undefined && (
+                <p
+                  data-testid="email-invite-notice"
+                  className="text-xs text-amber-300 bg-amber-950/30 border border-amber-800 rounded-lg px-3 py-2"
+                >
+                  {emailInviteNotice(header.recipientEmail)}
                 </p>
               )}
             </div>
