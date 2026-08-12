@@ -1,11 +1,17 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { getAttestationsBySubject, isReceiptBilateral } from './attestations';
 
+vi.mock('./client', () => ({ fetchKernel: vi.fn() }));
+
+import { getAttestationsBySubject, isReceiptBilateral, countersignAttestation } from './attestations';
+import { fetchKernel } from './client';
+
+const mockFetchKernel = vi.mocked(fetchKernel);
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
   vi.unstubAllEnvs();
+  vi.resetAllMocks();
 });
 
 function okResponse(body: unknown) {
@@ -126,5 +132,53 @@ describe('isReceiptBilateral', () => {
     globalThis.fetch = vi.fn().mockReturnValue(okResponse([])) as unknown as typeof fetch;
 
     await expect(isReceiptBilateral('did:imajin:scott', 'lot_1')).resolves.toBe(false);
+  });
+});
+
+describe('countersignAttestation', () => {
+  it('POSTs attestationId + witnessJws to /auth/api/attestations/countersign via fetchKernel', async () => {
+    mockFetchKernel.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: () => Promise.resolve({ id: 'att_1', cid: 'bafy1', status: 'bilateral' }),
+    } as Response);
+
+    await countersignAttestation('att_1', 'jws-token', 'att-acting-123');
+
+    expect(mockFetchKernel).toHaveBeenCalledOnce();
+    const [path, options, attestationId] = mockFetchKernel.mock.calls[0];
+    expect(path).toBe('/auth/api/attestations/countersign');
+    expect((options as RequestInit)?.method).toBe('POST');
+    expect(JSON.parse((options as RequestInit)?.body as string)).toEqual({
+      attestationId: 'att_1',
+      witnessJws: 'jws-token',
+    });
+    expect(attestationId).toBe('att-acting-123');
+  });
+
+  it('returns the parsed CountersignResult on success', async () => {
+    const result = { id: 'att_1', cid: 'bafy1', status: 'bilateral' as const };
+    mockFetchKernel.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: () => Promise.resolve(result),
+    } as Response);
+
+    await expect(countersignAttestation('att_1', 'jws-token', 'att-acting-123')).resolves.toEqual(result);
+  });
+
+  it('throws with status + error message on a kernel error response', async () => {
+    mockFetchKernel.mockResolvedValue({
+      ok: false,
+      status: 403,
+      statusText: 'Forbidden',
+      json: () => Promise.resolve({ error: 'Only the attestation subject can countersign' }),
+    } as Response);
+
+    await expect(countersignAttestation('att_1', 'jws-token', 'att-acting-123')).rejects.toThrow(
+      'attestations.countersign failed: 403 Only the attestation subject can countersign',
+    );
   });
 });

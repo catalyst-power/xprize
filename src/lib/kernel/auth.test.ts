@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as ed from '@noble/ed25519';
-import { mintAppToken, resolveAppAuth, TokenProvider } from './auth';
+import { jwtVerify, importJWK } from 'jose';
+import { mintAppToken, resolveAppAuth, TokenProvider, buildAppWitnessJws } from './auth';
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -187,6 +188,51 @@ describe('mintAppToken', () => {
 
     const valid = await ed.verifyAsync(sigBytes, msgBytes, await ed.getPublicKeyAsync(TEST_SEED));
     expect(valid).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildAppWitnessJws
+// ---------------------------------------------------------------------------
+
+describe('buildAppWitnessJws', () => {
+  it('returns a compact JWS signed with the app\'s own keypair, verifiable against its public key', async () => {
+    const jws = await buildAppWitnessJws({
+      appDid: TEST_APP_DID,
+      privateKey: TEST_PRIV_KEY_HEX,
+      attestationId: TEST_ATTESTATION,
+      subjectDid: TEST_USER_DID,
+    });
+
+    expect(jws.split('.')).toHaveLength(3);
+
+    const publicKey = await importJWK(
+      { kty: 'OKP', crv: 'Ed25519', x: Buffer.from(await ed.getPublicKeyAsync(TEST_SEED)).toString('base64url') },
+      'EdDSA',
+    );
+    const { payload, protectedHeader } = await jwtVerify(jws, publicKey);
+
+    expect(protectedHeader.alg).toBe('EdDSA');
+    expect(payload.iss).toBe(TEST_APP_DID);
+    expect(payload.attestationId).toBe(TEST_ATTESTATION);
+    expect(payload.subjectDid).toBe(TEST_USER_DID);
+  });
+
+  it('produces a JWS that fails verification against a different keypair', async () => {
+    const jws = await buildAppWitnessJws({
+      appDid: TEST_APP_DID,
+      privateKey: TEST_PRIV_KEY_HEX,
+      attestationId: TEST_ATTESTATION,
+      subjectDid: TEST_USER_DID,
+    });
+
+    const otherSeed = new Uint8Array(32).fill(0xcd);
+    const otherPublicKey = await importJWK(
+      { kty: 'OKP', crv: 'Ed25519', x: Buffer.from(await ed.getPublicKeyAsync(otherSeed)).toString('base64url') },
+      'EdDSA',
+    );
+
+    await expect(jwtVerify(jws, otherPublicKey)).rejects.toThrow();
   });
 });
 

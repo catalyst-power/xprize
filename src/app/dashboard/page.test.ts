@@ -14,9 +14,14 @@ vi.mock('@/lib/kernel/identity', () => ({
   getConnections: vi.fn(),
 }));
 
+vi.mock('@/lib/kernel/attestations', () => ({
+  getAttestationsBySubject: vi.fn(),
+}));
+
 import { getSession } from '@/lib/session';
 import { recentLots, getLotChain, collectRecipientDids, type LotChain, type RecentLot } from '@/lib/supply';
 import { getConnections, type ConnectionEntry } from '@/lib/kernel/identity';
+import { getAttestationsBySubject, type AttestationRecord } from '@/lib/kernel/attestations';
 import DashboardPage, {
   ConnectErrorBanner,
   connectErrorLabel,
@@ -26,12 +31,18 @@ import DashboardPage, {
   resolveInviteError,
 } from './page';
 import { DeliveryGesture } from './DeliveryGesture';
+import { PendingSignatures } from './PendingSignatures';
 
 const mockGetSession = vi.mocked(getSession);
 const mockRecentLots = vi.mocked(recentLots);
 const mockGetConnections = vi.mocked(getConnections);
 const mockGetLotChain = vi.mocked(getLotChain);
 const mockCollectRecipientDids = vi.mocked(collectRecipientDids);
+const mockGetAttestationsBySubject = vi.mocked(getAttestationsBySubject);
+
+// Default: no pending signatures — most existing tests below don't exercise
+// the inbox itself, so give every test a working default (xprize#74).
+mockGetAttestationsBySubject.mockResolvedValue([]);
 
 // xprize#59 wiring defaults — most existing tests below don't exercise the
 // activity heuristic itself (that's covered in supply.test.ts), so give
@@ -290,6 +301,63 @@ describe('DashboardPage', () => {
     expect(mockCollectRecipientDids).toHaveBeenCalledWith([]);
     const gesture = findElementOfType(element, DeliveryGesture);
     expect(gesture?.props?.['activeRecipientDids']).toEqual([]);
+  });
+
+  // -------------------------------------------------------------------------
+  // Pending-signatures inbox (xprize#74) — attestations naming the current
+  // session user as *subject* that are still pending. The formatting/sign
+  // action itself is unit-tested in PendingSignatures.test.ts; here we only
+  // check the page fetches and threads them through.
+  // -------------------------------------------------------------------------
+
+  const PENDING_ATTESTATION: AttestationRecord = {
+    id: 'att_1',
+    issuerDid: 'did:imajin:scott',
+    subjectDid: 'did:imajin:debbie',
+    type: 'supply.received',
+    contextId: 'lot_1',
+    contextType: 'supply',
+    cid: 'bafy1',
+    attestationStatus: 'pending',
+    issuedAt: '2026-08-11T00:00:00Z',
+  };
+
+  it("fetches attestations naming the session user as subject with status=pending (#74)", async () => {
+    mockGetSession.mockResolvedValue(SESSION_USER);
+    mockRecentLots.mockResolvedValue([]);
+    mockGetConnections.mockResolvedValue([]);
+
+    await DashboardPage({ searchParams: Promise.resolve({}) });
+
+    expect(mockGetAttestationsBySubject).toHaveBeenCalledWith({
+      subjectDid: SESSION_USER.did,
+      status: 'pending',
+    });
+  });
+
+  it('passes the fetched pending attestations through to PendingSignatures', async () => {
+    mockGetSession.mockResolvedValue(SESSION_USER);
+    mockRecentLots.mockResolvedValue([]);
+    mockGetConnections.mockResolvedValue([]);
+    mockGetAttestationsBySubject.mockResolvedValue([PENDING_ATTESTATION]);
+
+    const element = await DashboardPage({ searchParams: Promise.resolve({}) });
+
+    const pendingSignatures = findElementOfType(element, PendingSignatures);
+    expect(pendingSignatures).toBeDefined();
+    expect(pendingSignatures?.props?.['attestations']).toEqual([PENDING_ATTESTATION]);
+  });
+
+  it('renders PendingSignatures with an empty list when the kernel call fails (fail-closed, non-fatal)', async () => {
+    mockGetSession.mockResolvedValue(SESSION_USER);
+    mockRecentLots.mockResolvedValue([]);
+    mockGetConnections.mockResolvedValue([]);
+    mockGetAttestationsBySubject.mockRejectedValue(new Error('attestations.read failed: 500 Internal Server Error'));
+
+    const element = await DashboardPage({ searchParams: Promise.resolve({}) });
+
+    const pendingSignatures = findElementOfType(element, PendingSignatures);
+    expect(pendingSignatures?.props?.['attestations']).toEqual([]);
   });
 });
 
