@@ -25,6 +25,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { getSession } from '@/lib/session';
 import { confirmInference, type ConfirmIntentBody } from '@/lib/inference';
 import { sendDirectMessage } from '@/lib/kernel/chat';
+import { cacheRecipientDid } from '@/lib/deliveryNotifyStore';
 
 export const dynamic = 'force-dynamic';
 
@@ -80,6 +81,12 @@ export async function POST(
     // signed attestation's subject back (see the known kernel limitation
     // documented on `ConfirmIntentBody` in src/lib/inference.ts).
     if (body?.recipient !== undefined && body.recipient !== '' && result.externalId !== '') {
+      // Cache the real recipient DID now, while it's known for certain
+      // (xprize#75) — the `received` stage's own persisted payload may not
+      // carry it at all (known kernel limitation documented on
+      // `ConfirmIntentBody`), so manual resend and the reminder ladder read
+      // this cache instead of re-deriving it later.
+      cacheRecipientDid(result.externalId, body.recipient);
       sendDirectMessage(
         body.recipient,
         buildDeliveryNotificationMessage(result.externalId),

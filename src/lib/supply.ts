@@ -176,6 +176,28 @@ export function collectRecipientDids(chains: readonly LotChain[]): Set<string> {
 }
 
 /**
+ * Convenience wrapper around the xprize#59 "active on AgriFortress"
+ * heuristic: fetches a supplier's recent lots and their chains, then scans
+ * every stage for a mentioned recipient DID (`collectRecipientDids`).
+ * Mirrors the inline computation in dashboard/page.tsx; extracted here so
+ * other server-side call sites (delivery resend/reminders, xprize#75) can
+ * reuse the same heuristic without duplicating the fetch-chains dance. Any
+ * individual lot or lot-chain fetch failure is non-fatal (fail-open, same
+ * as the dashboard) rather than failing the whole scan.
+ */
+export async function resolveActiveRecipientDids(
+  supplierDid: string,
+  attestationId: string,
+  limit = 20,
+): Promise<Set<string>> {
+  const lots = await recentLots(supplierDid, attestationId, limit).catch(() => []);
+  const chains = await Promise.all(
+    lots.map((lot) => getLotChain(lot.correlationId, attestationId).catch((): LotChain | null => null)),
+  );
+  return collectRecipientDids(chains.filter((chain): chain is LotChain => chain !== null));
+}
+
+/**
  * Read the most recent lots for a supplier.
  * GET /supply/api/lots?supplier={did}&limit={n} — app-auth-gated (supply:read).
  * Returns an empty array when the supplier has no prior lots.

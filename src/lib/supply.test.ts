@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { collectRecipientDids, declareSupplyLot, confirmDelivery, getLotChain, getLotChainAsSelf, recentLots } from './supply';
+import {
+  collectRecipientDids,
+  declareSupplyLot,
+  confirmDelivery,
+  getLotChain,
+  getLotChainAsSelf,
+  recentLots,
+  resolveActiveRecipientDids,
+} from './supply';
 import type { LotChain, RecentLot } from './supply';
 
 vi.mock('./kernel/client', () => ({ fetchKernel: vi.fn(), fetchKernelAsSelf: vi.fn() }));
@@ -385,6 +393,58 @@ describe('getLotChain', () => {
     await expect(getLotChain('lot_abc123', 'att-scott-123')).rejects.toThrow(
       'supply.lot.read failed: 500 Internal Server Error',
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveActiveRecipientDids (xprize#75) — a thin fetch-chains-then-scan
+// wrapper around collectRecipientDids, reused by delivery resend/reminders.
+// ---------------------------------------------------------------------------
+
+describe('resolveActiveRecipientDids', () => {
+  it('fetches recent lots, their chains, and returns collectRecipientDids over them', async () => {
+    mockFetch
+      .mockReturnValueOnce(okResponse(RECENT_LOTS_RESPONSE))
+      .mockReturnValueOnce(okResponse(LOT_CHAIN_RESPONSE));
+
+    const result = await resolveActiveRecipientDids('did:imajin:scott', 'att-scott-123');
+
+    expect(result).toEqual(new Set(['Grace Harbour Farms']));
+  });
+
+  it('passes a custom limit through to recentLots', async () => {
+    mockFetch.mockReturnValue(okResponse({ lots: [] }));
+
+    await resolveActiveRecipientDids('did:imajin:scott', 'att-scott-123', 5);
+
+    const [path] = mockFetch.mock.calls[0];
+    expect(path).toContain('limit=5');
+  });
+
+  it('returns an empty set when the supplier has no recent lots', async () => {
+    mockFetch.mockReturnValue(okResponse({ lots: [] }));
+
+    const result = await resolveActiveRecipientDids('did:imajin:scott', 'att-scott-123');
+
+    expect(result).toEqual(new Set());
+  });
+
+  it('fails open (empty set) when recentLots itself throws', async () => {
+    mockFetch.mockReturnValue(errorResponse(500, { error: 'boom' }));
+
+    const result = await resolveActiveRecipientDids('did:imajin:scott', 'att-scott-123');
+
+    expect(result).toEqual(new Set());
+  });
+
+  it('omits a lot from the scan (non-fatal) when its chain fetch fails', async () => {
+    mockFetch
+      .mockReturnValueOnce(okResponse(RECENT_LOTS_RESPONSE))
+      .mockReturnValueOnce(errorResponse(500, { error: 'boom' }));
+
+    const result = await resolveActiveRecipientDids('did:imajin:scott', 'att-scott-123');
+
+    expect(result).toEqual(new Set());
   });
 });
 
