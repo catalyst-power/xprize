@@ -16,6 +16,7 @@
 import { getLotChain, type LotChain, type LotChainStage } from '@/lib/supply';
 import { attemptInvoiceCreation } from '@/lib/settlementFlow';
 import type { SettlementView } from '@/lib/settlement';
+import { ResendNotification } from './ResendNotification';
 
 // ---------------------------------------------------------------------------
 // Pure helpers ΓÇö exported for testing
@@ -261,6 +262,9 @@ export async function DeliveryReceipt(
           physical-world truth.
         </p>
       </div>
+
+      {/* Manual resend (xprize#75) — only while the recipient hasn't yet countersigned; once bilateral, resending would just be noise. */}
+      {settlement.state === 'pending-invoice' && <ResendNotification correlationId={lot.correlationId} />}
 
       <SettlementSection settlement={settlement} />
     </section>

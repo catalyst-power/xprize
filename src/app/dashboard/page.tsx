@@ -26,6 +26,7 @@ import { getConnections, type ConnectionEntry } from '@/lib/kernel/identity';
 import { ConnectedServicesPanel } from './ConnectedServicesPanel';
 import { DeliveryGesture } from './DeliveryGesture';
 import { DeliveryReceipt } from './DeliveryReceipt';
+import { ReminderTrigger } from './ReminderTrigger';
 
 export const dynamic = 'force-dynamic';
 
@@ -211,6 +212,9 @@ export default async function DashboardPage(props: { searchParams: SearchParams 
   return (
     <div className="min-h-screen bg-[#0a0a0a] p-6">
       <div className="max-w-2xl mx-auto space-y-8">
+
+        {/* Reminder ladder (xprize#75) — fire-and-forget check on every dashboard load, the closest this app gets to cron. */}
+        <ReminderTrigger />
 
         {/* Header */}
         <header className="flex items-center justify-between pt-4">

@@ -7,6 +7,7 @@ vi.mock('@/lib/supply', async () => {
 vi.mock('@/lib/settlementFlow', () => ({ attemptInvoiceCreation: vi.fn() }));
 
 import { findReceivedStage, toReceiptPayload, DeliveryReceipt, SettlementSection } from './DeliveryReceipt';
+import { ResendNotification } from './ResendNotification';
 import { getLotChain, type LotChain } from '@/lib/supply';
 import { attemptInvoiceCreation } from '@/lib/settlementFlow';
 
@@ -203,6 +204,45 @@ describe('DeliveryReceipt — settlement rendering', () => {
     await DeliveryReceipt({ correlationId: 'lot_abc123', attestationId: 'att-1' });
 
     expect(mockAttemptInvoiceCreation).not.toHaveBeenCalled();
+  });
+});
+
+describe('DeliveryReceipt — manual resend (xprize#75)', () => {
+  it('renders ResendNotification while the receipt is not yet bilateral (pending-invoice)', async () => {
+    mockGetLotChain.mockResolvedValue(MOCK_CHAIN);
+    mockAttemptInvoiceCreation.mockResolvedValue({ state: 'pending-invoice' });
+
+    const element = await DeliveryReceipt({ correlationId: 'lot_abc123', attestationId: 'att-1' });
+
+    const resend = findElementOfType(element, ResendNotification);
+    expect(resend).toBeDefined();
+    expect(resend?.props?.['correlationId']).toBe('lot_abc123');
+  });
+
+  it('does not render ResendNotification once the receipt is bilateral (awaiting-payment)', async () => {
+    mockGetLotChain.mockResolvedValue(MOCK_CHAIN);
+    mockAttemptInvoiceCreation.mockResolvedValue({ state: 'awaiting-payment', invoiceId: 'inv_1' });
+
+    const element = await DeliveryReceipt({ correlationId: 'lot_abc123', attestationId: 'att-1' });
+
+    expect(findElementOfType(element, ResendNotification)).toBeUndefined();
+  });
+
+  it('does not render ResendNotification once settled', async () => {
+    mockGetLotChain.mockResolvedValue(MOCK_CHAIN);
+    mockAttemptInvoiceCreation.mockResolvedValue({ state: 'settled', invoiceId: 'inv_1' });
+
+    const element = await DeliveryReceipt({ correlationId: 'lot_abc123', attestationId: 'att-1' });
+
+    expect(findElementOfType(element, ResendNotification)).toBeUndefined();
+  });
+
+  it('does not render ResendNotification while the receipt is still pending (no received stage)', async () => {
+    mockGetLotChain.mockResolvedValue({ ...MOCK_CHAIN, stages: [DECLARED_STAGE] });
+
+    const element = await DeliveryReceipt({ correlationId: 'lot_abc123', attestationId: 'att-1' });
+
+    expect(findElementOfType(element, ResendNotification)).toBeUndefined();
   });
 });
 
