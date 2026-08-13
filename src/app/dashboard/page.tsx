@@ -56,6 +56,26 @@ export function connectErrorLabel(connectError: string): string {
 }
 
 /**
+ * Attestation types that may appear in the pending-signatures inbox (xprize#89).
+ *
+ * `getAttestationsBySubject` has no way to request more than one `type` at
+ * once (the kernel's `type` query param takes a single value), and the
+ * dashboard needs both delivery-lifecycle types, so the fetch stays
+ * unfiltered and the allow-list is applied client-side instead. This is
+ * also the fix for a kernel bug where `connection.invited` publishes
+ * `subject = sender DID`: without this filter the sender sees their own
+ * outgoing invite as a signable pending attestation. Connection-management
+ * attestations (`connection.invited`, `app.authorized`, `app.revoked`) must
+ * never reach the delivery-signing inbox.
+ */
+export const SIGNABLE_ATTESTATION_TYPES = ['supply.received', 'supply.declared'] as const;
+
+/** Whether an attestation type belongs in the pending-signatures inbox (xprize#89). */
+export function isSignableAttestationType(type: string): boolean {
+  return (SIGNABLE_ATTESTATION_TYPES as readonly string[]).includes(type);
+}
+
+/**
  * Read the `invite_error` flag `DeliveryGesture` appends to the receipt
  * redirect URL when its best-effort connection invite (xprize#59) failed to
  * send (xprize#77). The delivery itself is unaffected — this is a small
@@ -197,6 +217,15 @@ export default async function DashboardPage(props: { searchParams: SearchParams 
       return [];
     }),
   ]);
+  // xprize#89: the kernel's `type` query param only accepts a single value,
+  // and connection-management attestations (`connection.invited`,
+  // `app.authorized`, `app.revoked`) must never appear in the delivery-
+  // signing inbox, so the allow-list is applied here rather than at the
+  // fetch call above.
+  const signablePendingAttestations = pendingAttestations.filter((record) =>
+    isSignableAttestationType(record.type),
+  );
+
   const priorLot: RecentLot | undefined = recentLotsList.at(0);
 
   // xprize#59: best-effort "active on AgriFortress" signal for the recipient
@@ -266,8 +295,9 @@ export default async function DashboardPage(props: { searchParams: SearchParams 
             />
           )}
 
-        {/* Pending signatures — attestations naming the current user as subject, awaiting their signature (#74) */}
-        <PendingSignatures attestations={pendingAttestations} />
+        {/* Pending signatures — attestations naming the current user as subject, awaiting their
+            signature, restricted to signable supply types (#74, #89) */}
+        <PendingSignatures attestations={signablePendingAttestations} />
 
         {/* Recent Deliveries — read-only list of the supplier's most recent signed lots (#49) */}
         <RecentDeliveries lots={recentLotsList} />

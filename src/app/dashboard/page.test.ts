@@ -26,6 +26,7 @@ import DashboardPage, {
   ConnectErrorBanner,
   connectErrorLabel,
   InviteErrorNotice,
+  isSignableAttestationType,
   RecentDeliveries,
   resolveConnectError,
   resolveInviteError,
@@ -358,6 +359,61 @@ describe('DashboardPage', () => {
 
     const pendingSignatures = findElementOfType(element, PendingSignatures);
     expect(pendingSignatures?.props?.['attestations']).toEqual([]);
+  });
+
+  // -------------------------------------------------------------------------
+  // Signable-attestation-type filtering (xprize#89) — the kernel bug where
+  // `connection.invited` publishes `subject = sender DID` let a sender see
+  // their own outgoing invite as a signable pending attestation. Only
+  // `supply.received` / `supply.declared` may reach PendingSignatures.
+  // -------------------------------------------------------------------------
+
+  const CONNECTION_INVITE_ATTESTATION: AttestationRecord = {
+    ...PENDING_ATTESTATION,
+    id: 'att_invite',
+    type: 'connection.invited',
+  };
+
+  it('filters out non-supply attestation types (e.g. connection.invited) before rendering PendingSignatures (#89)', async () => {
+    mockGetSession.mockResolvedValue(SESSION_USER);
+    mockRecentLots.mockResolvedValue([]);
+    mockGetConnections.mockResolvedValue([]);
+    mockGetAttestationsBySubject.mockResolvedValue([
+      CONNECTION_INVITE_ATTESTATION,
+      PENDING_ATTESTATION,
+      { ...PENDING_ATTESTATION, id: 'att_declared', type: 'supply.declared' },
+      { ...PENDING_ATTESTATION, id: 'att_authorized', type: 'app.authorized' },
+      { ...PENDING_ATTESTATION, id: 'att_revoked', type: 'app.revoked' },
+    ]);
+
+    const element = await DashboardPage({ searchParams: Promise.resolve({}) });
+
+    const pendingSignatures = findElementOfType(element, PendingSignatures);
+    const attestations = pendingSignatures?.props?.['attestations'] as AttestationRecord[];
+    expect(attestations.map((a) => a.id)).toEqual(['att_1', 'att_declared']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isSignableAttestationType (xprize#89)
+// ---------------------------------------------------------------------------
+
+describe('isSignableAttestationType', () => {
+  it('allows supply.received', () => {
+    expect(isSignableAttestationType('supply.received')).toBe(true);
+  });
+
+  it('allows supply.declared', () => {
+    expect(isSignableAttestationType('supply.declared')).toBe(true);
+  });
+
+  it('rejects connection.invited', () => {
+    expect(isSignableAttestationType('connection.invited')).toBe(false);
+  });
+
+  it('rejects app.authorized and app.revoked', () => {
+    expect(isSignableAttestationType('app.authorized')).toBe(false);
+    expect(isSignableAttestationType('app.revoked')).toBe(false);
   });
 });
 
