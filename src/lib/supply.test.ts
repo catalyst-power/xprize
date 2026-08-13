@@ -5,20 +5,33 @@ import {
   confirmDelivery,
   getLotChain,
   getLotChainAsSelf,
+  materializeInferenceSupplyLot,
   recentLots,
   resolveActiveRecipientDids,
 } from './supply';
 import type { LotChain, RecentLot } from './supply';
 
-vi.mock('./kernel/client', () => ({ fetchKernel: vi.fn(), fetchKernelAsSelf: vi.fn() }));
+vi.mock('./kernel/client', () => ({
+  fetchKernel: vi.fn(),
+  fetchKernelAsSelf: vi.fn(),
+  fetchKernelAtUrl: vi.fn(),
+}));
 
-import { fetchKernel, fetchKernelAsSelf } from './kernel/client';
+import { fetchKernel, fetchKernelAsSelf, fetchKernelAtUrl } from './kernel/client';
 
 const mockFetch = vi.mocked(fetchKernel);
 const mockFetchAsSelf = vi.mocked(fetchKernelAsSelf);
+const mockFetchAtUrl = vi.mocked(fetchKernelAtUrl);
+
+const ORIGINAL_SUPPLY_API_URL = process.env.AGRIFORTRESS_SUPPLY_API_URL;
 
 afterEach(() => {
   vi.resetAllMocks();
+  if (ORIGINAL_SUPPLY_API_URL === undefined) {
+    delete process.env.AGRIFORTRESS_SUPPLY_API_URL;
+  } else {
+    process.env.AGRIFORTRESS_SUPPLY_API_URL = ORIGINAL_SUPPLY_API_URL;
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -349,6 +362,134 @@ describe('confirmDelivery', () => {
     await expect(
       confirmDelivery({ lotId: '', commodity: 'eggs', quantity: 6, unit: 'dozen' }, 'att-scott-123'),
     ).rejects.toThrow('supply.received failed: 400');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// materializeInferenceSupplyLot (xprize#88)
+//
+// The inference vocabulary resolver signs a `supply.received` attestation
+// on confirm but never creates a real supply-domain lot record. This app-
+// side bridge calls `/supply/api/received` itself so `collectRecipientDids()`
+// has something to scan. Gated on its own `AGRIFORTRESS_SUPPLY_API_URL` env
+// var, independent of `KERNEL_URL`.
+// ---------------------------------------------------------------------------
+
+describe('materializeInferenceSupplyLot', () => {
+  it('logs a warning and skips the call (returns undefined) when AGRIFORTRESS_SUPPLY_API_URL is unset', async () => {
+    delete process.env.AGRIFORTRESS_SUPPLY_API_URL;
+    const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const result = await materializeInferenceSupplyLot(
+      { lotId: 'lot_abc123', commodity: 'eggs', quantity: 6, unit: 'dozen' },
+      'att-scott-123',
+    );
+
+    expect(result).toBeUndefined();
+    expect(mockFetchAtUrl).not.toHaveBeenCalled();
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('AGRIFORTRESS_SUPPLY_API_URL not configured'),
+    );
+
+    consoleWarnSpy.mockRestore();
+  });
+
+  it('never throws when AGRIFORTRESS_SUPPLY_API_URL is unset — degrades gracefully', async () => {
+    delete process.env.AGRIFORTRESS_SUPPLY_API_URL;
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await expect(
+      materializeInferenceSupplyLot(
+        { lotId: 'lot_abc123', commodity: 'eggs', quantity: 6, unit: 'dozen' },
+        'att-scott-123',
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it('POSTs to /supply/api/received at the configured AGRIFORTRESS_SUPPLY_API_URL when set', async () => {
+    process.env.AGRIFORTRESS_SUPPLY_API_URL = 'https://dev-jin.imajin.ai';
+    mockFetchAtUrl.mockReturnValue(okResponse(RECEIVED_RESPONSE));
+
+    await materializeInferenceSupplyLot(
+      { lotId: 'lot_abc123', commodity: 'eggs', quantity: 6, unit: 'dozen' },
+      'att-scott-123',
+    );
+
+    expect(mockFetchAtUrl).toHaveBeenCalledOnce();
+    const [baseUrl, path, opts, attestationId] = mockFetchAtUrl.mock.calls[0];
+    expect(baseUrl).toBe('https://dev-jin.imajin.ai');
+    expect(path).toBe('/supply/api/received');
+    expect(opts?.method).toBe('POST');
+    const sent = JSON.parse(opts?.body as string) as Record<string, unknown>;
+    expect(sent.lotId).toBe('lot_abc123');
+    expect(sent.commodity).toBe('eggs');
+    expect(sent.quantity).toBe(6);
+    expect(sent.unit).toBe('dozen');
+    expect(attestationId).toBe('att-scott-123');
+  });
+
+  it('includes recipientDid when it looks like a real DID', async () => {
+    process.env.AGRIFORTRESS_SUPPLY_API_URL = 'https://dev-jin.imajin.ai';
+    mockFetchAtUrl.mockReturnValue(okResponse(RECEIVED_RESPONSE));
+
+    await materializeInferenceSupplyLot(
+      {
+        lotId: 'lot_abc123',
+        commodity: 'eggs',
+        quantity: 6,
+        unit: 'dozen',
+        recipientDid: 'did:imajin:david',
+      },
+      'att-scott-123',
+    );
+
+    const [, , opts] = mockFetchAtUrl.mock.calls[0];
+    const sent = JSON.parse(opts?.body as string) as Record<string, unknown>;
+    expect(sent.recipientDid).toBe('did:imajin:david');
+  });
+
+  it('omits recipientDid when it does not look like a DID (e.g. a free-text name)', async () => {
+    process.env.AGRIFORTRESS_SUPPLY_API_URL = 'https://dev-jin.imajin.ai';
+    mockFetchAtUrl.mockReturnValue(okResponse(RECEIVED_RESPONSE));
+
+    await materializeInferenceSupplyLot(
+      {
+        lotId: 'lot_abc123',
+        commodity: 'eggs',
+        quantity: 6,
+        unit: 'dozen',
+        recipientDid: 'Grace Harbour Farms',
+      },
+      'att-scott-123',
+    );
+
+    const [, , opts] = mockFetchAtUrl.mock.calls[0];
+    const sent = JSON.parse(opts?.body as string) as Record<string, unknown>;
+    expect('recipientDid' in sent).toBe(false);
+  });
+
+  it('returns the parsed SupplyStageResponse on success', async () => {
+    process.env.AGRIFORTRESS_SUPPLY_API_URL = 'https://dev-jin.imajin.ai';
+    mockFetchAtUrl.mockReturnValue(okResponse(RECEIVED_RESPONSE));
+
+    const result = await materializeInferenceSupplyLot(
+      { lotId: 'lot_abc123', commodity: 'eggs', quantity: 6, unit: 'dozen' },
+      'att-scott-123',
+    );
+
+    expect(result).toEqual(RECEIVED_RESPONSE);
+  });
+
+  it('throws with status + error message on a kernel error response', async () => {
+    process.env.AGRIFORTRESS_SUPPLY_API_URL = 'https://dev-jin.imajin.ai';
+    mockFetchAtUrl.mockReturnValue(errorResponse(400, { error: 'lotId is required' }));
+
+    await expect(
+      materializeInferenceSupplyLot(
+        { lotId: '', commodity: 'eggs', quantity: 6, unit: 'dozen' },
+        'att-scott-123',
+      ),
+    ).rejects.toThrow('supply.received (inference bridge) failed: 400');
   });
 });
 
