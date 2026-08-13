@@ -108,6 +108,12 @@ const INVITE_RESPONSE = {
   url: 'https://connections.imajin.ai/invite/did:imajin:scott/abc123',
 };
 
+const INVITE_RESPONSE_WITH_EMAIL_SENT = {
+  invite: { id: 'inv_1', code: 'abc123', delivery: 'email' as const, status: 'pending' },
+  url: 'https://connections.imajin.ai/invite/did:imajin:scott/abc123',
+  emailSent: false,
+};
+
 describe('createConnectionInvite', () => {
   it('POSTs to /connections/api/invites via fetchKernel, passing the caller-supplied attestationId', async () => {
     mockFetchKernel.mockReturnValue(okResponse(INVITE_RESPONSE));
@@ -152,6 +158,36 @@ describe('createConnectionInvite', () => {
     await expect(createConnectionInvite({ delivery: 'link' }, 'att-scott-123')).rejects.toThrow(
       'identity.invites.create failed: 401',
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createConnectionInvite — emailSent (xprize#90, ima-jin/imajin-ai PR #1849)
+// ---------------------------------------------------------------------------
+
+describe('createConnectionInvite — emailSent', () => {
+  it('passes through emailSent: true from the kernel response', async () => {
+    mockFetchKernel.mockReturnValue(okResponse({ ...INVITE_RESPONSE_WITH_EMAIL_SENT, emailSent: true }));
+
+    const result = await createConnectionInvite({ delivery: 'email', toEmail: 'david@graceharbour.farm' }, 'att-scott-123');
+
+    expect(result.emailSent).toBe(true);
+  });
+
+  it('passes through emailSent: false from the kernel response', async () => {
+    mockFetchKernel.mockReturnValue(okResponse(INVITE_RESPONSE_WITH_EMAIL_SENT));
+
+    const result = await createConnectionInvite({ delivery: 'email', toEmail: 'david@graceharbour.farm' }, 'att-scott-123');
+
+    expect(result.emailSent).toBe(false);
+  });
+
+  it('defaults emailSent to true when the kernel response omits it (backward compatible with an older kernel)', async () => {
+    mockFetchKernel.mockReturnValue(okResponse(INVITE_RESPONSE));
+
+    const result = await createConnectionInvite({ delivery: 'link' }, 'att-scott-123');
+
+    expect(result.emailSent).toBe(true);
   });
 });
 

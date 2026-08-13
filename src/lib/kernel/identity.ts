@@ -37,6 +37,8 @@ export interface ConnectionEntry {
   connectedAt: string;
 }
 
+type RawCreateInviteResponse = Omit<CreateInviteResponse, 'emailSent'> & { emailSent?: boolean };
+
 // ---------------------------------------------------------------------------
 // Client functions
 // ---------------------------------------------------------------------------
@@ -117,6 +119,12 @@ export interface CreateInviteResponse {
   };
   /** Shareable invite URL, e.g. `{connectionsBaseUrl}/invite/{did}/{code}`. */
   url: string;
+  /**
+   * Whether the kernel actually succeeded in sending the invite email
+   * (ima-jin/imajin-ai PR #1849, xprize#90). Older kernels omit this field;
+   * `createConnectionInvite` normalizes that legacy shape to `true`.
+   */
+  emailSent: boolean;
 }
 
 /**
@@ -171,5 +179,6 @@ async function parseInviteResponse(res: Response): Promise<CreateInviteResponse>
     throw new Error(`identity.invites.create failed: ${res.status} ${data.error ?? res.statusText}`);
   }
 
-  return res.json() as Promise<CreateInviteResponse>;
+  const body = await res.json() as RawCreateInviteResponse;
+  return { ...body, emailSent: body.emailSent ?? true };
 }

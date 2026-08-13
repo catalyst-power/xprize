@@ -376,6 +376,33 @@ const INVALID_LINES_MESSAGE =
 const MISSING_RECIPIENT_MESSAGE = 'Select a recipient before confirming.';
 const INVITE_FAILED_MESSAGE =
   'Invite could not be sent \u2014 the delivery was still recorded. Share the invite link with them directly.';
+const EMAIL_INVITE_NOT_SENT_MESSAGE =
+  'Invite created but email could not be sent \u2014 share the invite link manually.';
+const EMAIL_INVITE_SENT_MESSAGE = 'Invite email sent. You can also copy the invite link as a fallback.';
+
+export interface InviteDeliveryStatus {
+  inviteFailed: boolean;
+  inviteUrl?: string;
+  emailSent?: boolean;
+}
+
+export interface InviteStatusViewModel {
+  message?: string;
+  shouldShowCopyLink: boolean;
+}
+
+export function inviteStatusViewModel(status: InviteDeliveryStatus): InviteStatusViewModel {
+  if (status.inviteUrl !== undefined) {
+    const message = status.emailSent === true ? EMAIL_INVITE_SENT_MESSAGE : EMAIL_INVITE_NOT_SENT_MESSAGE;
+    return { message, shouldShowCopyLink: true };
+  }
+
+  if (status.inviteFailed) {
+    return { message: INVITE_FAILED_MESSAGE, shouldShowCopyLink: false };
+  }
+
+  return { shouldShowCopyLink: false };
+}
 
 /**
  * A delivery receipt is a claim *about* someone — the recipient DID is the
@@ -457,6 +484,8 @@ interface GestureState {
    * AGENTS.md §4) — only shown as a small non-blocking note (xprize#77).
    */
   inviteFailed?: boolean;
+  inviteUrl?: string;
+  emailSent?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -940,6 +969,8 @@ export function DeliveryGesture({ priorLot, connections = [], activeRecipientDid
     // silently swallowed either (xprize#77): the server-side route logs it,
     // and this flags it for a small non-blocking UI note below.
     let inviteFailed = false;
+    let inviteUrl: string | undefined;
+    let emailSent: boolean | undefined;
     if (isRecipientPendingInvite(header.recipient, activeRecipientDidSet)) {
       const recipientConnection = connections.find((c) => c.did === header.recipient);
       try {
@@ -976,7 +1007,11 @@ export function DeliveryGesture({ priorLot, connections = [], activeRecipientDid
             pendingAttestationId: confirm.attestationId,
           }),
         });
-        if (!inviteRes.ok) {
+        if (inviteRes.ok) {
+          const inviteData = await inviteRes.json() as { url?: string; emailSent?: boolean };
+          inviteUrl = inviteData.url;
+          emailSent = inviteData.emailSent ?? true;
+        } else {
           inviteFailed = true;
           console.error('[DeliveryGesture] Email invite failed:', inviteRes.status);
         }
@@ -997,7 +1032,7 @@ export function DeliveryGesture({ priorLot, connections = [], activeRecipientDid
     }
     // Fallback: no correlationId returned — keep the signed attestationId panel.
     // Never fabricate a receipt when the lot id is absent (claim boundary, AGENTS.md §4).
-    setState({ phase: 'done', attestationId: confirm.attestationId, inviteFailed });
+    setState({ phase: 'done', attestationId: confirm.attestationId, inviteFailed, inviteUrl, emailSent });
   }
 
   // --- Reset ---
@@ -1008,24 +1043,51 @@ export function DeliveryGesture({ priorLot, connections = [], activeRecipientDid
     mediaRecorderRef.current = null;
   }
 
+  function copyInviteLink(url: string): void {
+    globalThis.navigator.clipboard.writeText(url).catch((err: unknown) => {
+      console.error('[DeliveryGesture] Copy invite link failed:', err);
+    });
+  }
+
   // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
 
   if (state.phase === 'done') {
+    const inviteStatus = inviteStatusViewModel({
+      inviteFailed: state.inviteFailed === true,
+      inviteUrl: state.inviteUrl,
+      emailSent: state.emailSent,
+    });
     return (
       <section className="rounded-xl border border-green-800 bg-green-950/30 p-5 space-y-3">
         <p className="text-sm font-medium text-green-400">Delivery recorded</p>
         <p className="text-xs text-zinc-400">Attestation</p>
         <p className="text-xs text-zinc-300 font-mono break-all">{state.attestationId}</p>
-        {state.inviteFailed === true && (
+        {inviteStatus.message !== undefined && (
           <p
-            data-testid="invite-failed-notice"
+            data-testid="invite-status-notice"
             className="text-xs text-amber-300 bg-amber-950/30 border border-amber-800 rounded-lg px-3 py-2"
           >
-            {INVITE_FAILED_MESSAGE}
+            {inviteStatus.message}
           </p>
         )}
+        {inviteStatus.shouldShowCopyLink && state.inviteUrl !== undefined && (() => {
+          const inviteUrl = state.inviteUrl;
+          return (
+            <div className="space-y-2">
+              <p className="text-xs text-zinc-400">Invite link</p>
+              <p className="text-xs text-zinc-300 font-mono break-all">{inviteUrl}</p>
+              <button
+                type="button"
+                onClick={() => copyInviteLink(inviteUrl)}
+                className="text-xs rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-zinc-300 hover:bg-zinc-700 transition-colors"
+              >
+                Copy invite link
+              </button>
+            </div>
+          );
+        })()}
         <button
           type="button"
           onClick={reset}

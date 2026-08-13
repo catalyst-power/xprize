@@ -201,7 +201,7 @@ describe('POST /api/delivery/[id]/resend — success', () => {
     mockIsBilateral.mockResolvedValue(false);
     mockSendDirectMessage.mockResolvedValue(undefined);
     mockResolveActiveRecipientDids.mockResolvedValue(new Set()); // recipient not active
-    mockCreateInvite.mockResolvedValue({ invite: { id: 'inv_1', code: 'c1', delivery: 'link', status: 'pending' }, url: 'https://example.test/invite' });
+    mockCreateInvite.mockResolvedValue({ invite: { id: 'inv_1', code: 'c1', delivery: 'link', status: 'pending' }, url: 'https://example.test/invite', emailSent: true });
 
     const res = await POST(makeRequest(), makeParams());
     const body = (await res.json()) as { inviteSent: boolean; inviteFailed: boolean };

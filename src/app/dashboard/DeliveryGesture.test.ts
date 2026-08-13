@@ -8,6 +8,7 @@ import {
   hasRecipient,
   InferenceDebugPanel,
   inviteNoticeForRecipient,
+  inviteStatusViewModel,
   isInvitingByEmail,
   isRecipientPendingInvite,
   noActiveConnectionsNotice,
@@ -401,6 +402,43 @@ describe('emailInviteNotice', () => {
     expect(notice).toBeDefined();
     expect(notice).toMatch(/emailed/i);
     expect(notice).toContain('david@graceharbour.farm');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// inviteStatusViewModel (xprize#90) — surfaces the kernel's emailSent flag
+// (ima-jin/imajin-ai PR #1849) with an always-available invite-link fallback.
+// ---------------------------------------------------------------------------
+
+describe('inviteStatusViewModel', () => {
+  it('shows the email-sent message and offers the copy link when emailSent is true', () => {
+    const result = inviteStatusViewModel({ inviteFailed: false, inviteUrl: 'https://example.com/invite/1', emailSent: true });
+    expect(result.shouldShowCopyLink).toBe(true);
+    expect(result.message).toMatch(/sent/i);
+  });
+
+  it('shows the email-not-sent fallback message and offers the copy link when emailSent is false', () => {
+    const result = inviteStatusViewModel({ inviteFailed: false, inviteUrl: 'https://example.com/invite/1', emailSent: false });
+    expect(result.shouldShowCopyLink).toBe(true);
+    expect(result.message).toMatch(/could not be sent/i);
+    expect(result.message).toMatch(/share the invite link manually/i);
+  });
+
+  it('still offers the copy link when an invite URL is present but emailSent is unset (link invites)', () => {
+    const result = inviteStatusViewModel({ inviteFailed: false, inviteUrl: 'https://example.com/invite/1' });
+    expect(result.shouldShowCopyLink).toBe(true);
+  });
+
+  it('falls back to the invite-failed message when the whole invite request failed and no URL is available', () => {
+    const result = inviteStatusViewModel({ inviteFailed: true });
+    expect(result.shouldShowCopyLink).toBe(false);
+    expect(result.message).toMatch(/invite could not be sent/i);
+  });
+
+  it('shows nothing when there was no invite attempt at all', () => {
+    const result = inviteStatusViewModel({ inviteFailed: false });
+    expect(result.shouldShowCopyLink).toBe(false);
+    expect(result.message).toBeUndefined();
   });
 });
 
