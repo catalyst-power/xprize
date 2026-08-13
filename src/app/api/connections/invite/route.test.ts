@@ -25,6 +25,7 @@ const SESSION_USER = {
 const INVITE_RESPONSE = {
   invite: { id: 'inv_1', code: 'abc123', delivery: 'link' as const, status: 'pending' },
   url: 'https://connections.imajin.ai/invite/did:imajin:scott/abc123',
+  emailSent: true,
 };
 
 function makeRequest(body?: object) {
@@ -114,6 +115,7 @@ describe('POST /api/connections/invite — success', () => {
 const EMAIL_INVITE_RESPONSE = {
   invite: { id: 'inv_2', code: 'def456', delivery: 'email' as const, status: 'pending', toDid: 'did:imajin:new-stub' },
   url: 'https://connections.imajin.ai/invite/did:imajin:scott/def456',
+  emailSent: true,
 };
 
 describe('POST /api/connections/invite — email path (xprize#86)', () => {
