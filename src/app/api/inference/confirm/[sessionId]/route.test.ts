@@ -5,14 +5,17 @@ import { POST } from './route';
 vi.mock('@/lib/session', () => ({ getSession: vi.fn() }));
 vi.mock('@/lib/inference', () => ({ confirmInference: vi.fn() }));
 vi.mock('@/lib/kernel/chat', () => ({ sendDirectMessage: vi.fn() }));
+vi.mock('@/lib/supply', () => ({ materializeInferenceSupplyLot: vi.fn() }));
 
 import { getSession } from '@/lib/session';
 import { confirmInference } from '@/lib/inference';
 import { sendDirectMessage } from '@/lib/kernel/chat';
+import { materializeInferenceSupplyLot } from '@/lib/supply';
 
 const mockGetSession = vi.mocked(getSession);
 const mockConfirm = vi.mocked(confirmInference);
 const mockSendDirectMessage = vi.mocked(sendDirectMessage);
+const mockMaterialize = vi.mocked(materializeInferenceSupplyLot);
 
 afterEach(() => {
   vi.resetAllMocks();
@@ -204,6 +207,100 @@ describe('POST /api/inference/confirm/[sessionId] — counterparty notification'
     expect(body.attestationId).toBe(CONFIRM_RESPONSE.attestationId);
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       expect.stringContaining('Counterparty delivery notification failed'),
+      expect.anything(),
+    );
+
+    consoleErrorSpy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Supply lot materialization (xprize#88)
+// ---------------------------------------------------------------------------
+
+describe('POST /api/inference/confirm/[sessionId] — supply lot materialization', () => {
+  const CONFIRMED_LINE = {
+    product: { label: 'eggs' },
+    qty: 6,
+    unit: 'dozen',
+    unitPrice: 0,
+    currency: 'USD',
+    total: 0,
+    priceBasis: 'per_unit' as const,
+  };
+
+  it('materializes the supply lot with the confirmed line and recipient, threaded on the resolved correlationId', async () => {
+    mockGetSession.mockResolvedValue(SESSION_USER);
+    mockConfirm.mockResolvedValue(CONFIRM_RESPONSE);
+    mockMaterialize.mockResolvedValue({ ok: true, correlationId: CONFIRM_RESPONSE.externalId, stage: 'received' });
+
+    await POST(
+      makeRequest('sess_abc', { recipient: 'did:imajin:david', lines: [CONFIRMED_LINE] }),
+      makeParams('sess_abc'),
+    );
+
+    expect(mockMaterialize).toHaveBeenCalledOnce();
+    const [request, attestationId] = mockMaterialize.mock.calls[0];
+    expect(request).toEqual({
+      lotId: CONFIRM_RESPONSE.externalId,
+      commodity: 'eggs',
+      quantity: 6,
+      unit: 'dozen',
+      recipientDid: 'did:imajin:david',
+    });
+    expect(attestationId).toBe(SESSION_USER.attestationId);
+  });
+
+  it('omits recipientDid when the confirmed card has no recipient', async () => {
+    mockGetSession.mockResolvedValue(SESSION_USER);
+    mockConfirm.mockResolvedValue(CONFIRM_RESPONSE);
+    mockMaterialize.mockResolvedValue(undefined);
+
+    await POST(makeRequest('sess_abc', { lines: [CONFIRMED_LINE] }), makeParams('sess_abc'));
+
+    expect(mockMaterialize).toHaveBeenCalledOnce();
+    const [request] = mockMaterialize.mock.calls[0];
+    expect('recipientDid' in request).toBe(false);
+  });
+
+  it('skips materialization when the confirmed body has no line items (bare confirm call)', async () => {
+    mockGetSession.mockResolvedValue(SESSION_USER);
+    mockConfirm.mockResolvedValue(CONFIRM_RESPONSE);
+
+    await POST(makeRequest('sess_abc'), makeParams('sess_abc'));
+
+    expect(mockMaterialize).not.toHaveBeenCalled();
+  });
+
+  it('skips materialization when confirmInference did not resolve a lot correlationId', async () => {
+    mockGetSession.mockResolvedValue(SESSION_USER);
+    mockConfirm.mockResolvedValue({ ...CONFIRM_RESPONSE, externalId: '' });
+
+    await POST(
+      makeRequest('sess_abc', { recipient: 'did:imajin:david', lines: [CONFIRMED_LINE] }),
+      makeParams('sess_abc'),
+    );
+
+    expect(mockMaterialize).not.toHaveBeenCalled();
+  });
+
+  it('still returns 200 with the confirm result when materialization fails (non-blocking, additive)', async () => {
+    mockGetSession.mockResolvedValue(SESSION_USER);
+    mockConfirm.mockResolvedValue(CONFIRM_RESPONSE);
+    mockMaterialize.mockRejectedValue(new Error('supply.received (inference bridge) failed: 500'));
+    mockSendDirectMessage.mockResolvedValue(undefined);
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const res = await POST(
+      makeRequest('sess_abc', { recipient: 'did:imajin:david', lines: [CONFIRMED_LINE] }),
+      makeParams('sess_abc'),
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as typeof CONFIRM_RESPONSE;
+    expect(body.attestationId).toBe(CONFIRM_RESPONSE.attestationId);
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to materialize supply lot'),
       expect.anything(),
     );
 

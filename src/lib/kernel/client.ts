@@ -29,10 +29,10 @@ const DEFAULT_KERNEL_URL = 'https://imajin.ai';
 // many suppliers concurrently from the same process.
 // ---------------------------------------------------------------------------
 
-function getTokenProvider(attestationId: string): TokenProvider {
+function getTokenProvider(attestationId: string, baseUrlOverride?: string): TokenProvider {
   const appDid = process.env.APP_DID;
   const privateKey = process.env.APP_PRIVATE_KEY;
-  const kernelUrl = process.env.KERNEL_URL ?? DEFAULT_KERNEL_URL;
+  const kernelUrl = baseUrlOverride ?? process.env.KERNEL_URL ?? DEFAULT_KERNEL_URL;
 
   if (!appDid || !privateKey) {
     throw new Error('Kernel client requires APP_DID and APP_PRIVATE_KEY env vars');
@@ -43,10 +43,14 @@ function getTokenProvider(attestationId: string): TokenProvider {
   };
   g.__kernelTokenProvidersByAttestation ??= new Map();
 
-  let provider = g.__kernelTokenProvidersByAttestation.get(attestationId);
+  // Keyed by base URL + attestationId so an explicit `baseUrlOverride`
+  // (e.g. AGRIFORTRESS_SUPPLY_API_URL, see fetchKernelAtUrl below) never
+  // collides with the default KERNEL_URL provider for the same attestation.
+  const cacheKey = `${kernelUrl}::${attestationId}`;
+  let provider = g.__kernelTokenProvidersByAttestation.get(cacheKey);
   if (!provider) {
     provider = new TokenProvider({ kernelUrl, appDid, privateKey, attestationId });
-    g.__kernelTokenProvidersByAttestation.set(attestationId, provider);
+    g.__kernelTokenProvidersByAttestation.set(cacheKey, provider);
   }
 
   return provider;
@@ -80,8 +84,9 @@ async function fetchWithProvider(
   provider: TokenProvider,
   path: string,
   options?: RequestInit,
+  baseUrlOverride?: string,
 ): Promise<Response> {
-  const kernelUrl = (process.env.KERNEL_URL ?? DEFAULT_KERNEL_URL).replace(/\/$/, '');
+  const kernelUrl = (baseUrlOverride ?? process.env.KERNEL_URL ?? DEFAULT_KERNEL_URL).replace(/\/$/, '');
   const token = await provider.getToken();
   const url = `${kernelUrl}${path}`;
 
@@ -159,4 +164,28 @@ export async function fetchKernelAsSelf(
   options?: RequestInit,
 ): Promise<Response> {
   return fetchWithProvider(getSelfTokenProvider(), path, options);
+}
+
+/**
+ * Fetch a kernel API endpoint with automatic app-auth Bearer injection,
+ * acting on behalf of a specific supplier, against an explicit base URL
+ * rather than the default `KERNEL_URL`.
+ *
+ * Used by the inference→supply bridge (xprize#88): lot materialization is
+ * gated on its own `AGRIFORTRESS_SUPPLY_API_URL` env var — mirroring the
+ * kernel vocabulary resolver's own feature flag — rather than on the
+ * always-configured `KERNEL_URL`, so materialization stays an explicit
+ * per-environment opt-in. See `materializeInferenceSupplyLot` in
+ * src/lib/supply.ts for the call site.
+ *
+ * @example
+ *   const res = await fetchKernelAtUrl(supplyApiUrl, '/supply/api/received', opts, attestationId);
+ */
+export async function fetchKernelAtUrl(
+  baseUrl: string,
+  path: string,
+  options: RequestInit | undefined,
+  attestationId: string,
+): Promise<Response> {
+  return fetchWithProvider(getTokenProvider(attestationId, baseUrl), path, options, baseUrl);
 }

@@ -13,7 +13,7 @@
  *   publishReceiptStage — received (#1384)
  */
 
-import { fetchKernel, fetchKernelAsSelf } from './kernel/client';
+import { fetchKernel, fetchKernelAsSelf, fetchKernelAtUrl } from './kernel/client';
 import { looksLikeDid } from './reminders';
 
 // ---------------------------------------------------------------------------
@@ -300,6 +300,82 @@ export async function confirmDelivery(
   if (!res.ok) {
     const data = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
     throw new Error(`supply.received failed: ${res.status} ${data.error ?? res.statusText}`);
+  }
+
+  return res.json() as Promise<SupplyStageResponse>;
+}
+
+// ---------------------------------------------------------------------------
+// Inference → supply bridge (xprize#88)
+//
+// The kernel's agrifortress inference vocabulary resolver signs a
+// `supply.received`-labeled attestation on confirm, but never creates a
+// real supply-domain lot record — `getLotChain()`/`recentLots()` (and by
+// extension `collectRecipientDids()`) read from the supply domain, not from
+// attestations, so no lot ever showed up there and every recipient looked
+// like "invite required" forever (root cause of #88).
+//
+// Design decision (Ryan, xprize#88): this bridge is APP-SIDE — the kernel
+// gets no reactor for it. After a successful `confirmInference()`, this app
+// calls `POST /supply/api/received` itself with the confirmed metadata so
+// the lot chain that `collectRecipientDids()` scans actually exists.
+// ---------------------------------------------------------------------------
+
+export interface MaterializeInferenceLotRequest {
+  /** The `supply.received` lot correlationId — `InferenceConfirmResponse.externalId`. */
+  lotId: string;
+  commodity: string;
+  quantity: number;
+  unit: string;
+  /** Same DID guard as `SupplyReceivedRequest.recipientDid` — see its doc comment. */
+  recipientDid?: string;
+}
+
+/**
+ * Materialize a supply lot for a confirmed inference delivery (xprize#88).
+ *
+ * Gated on its own `AGRIFORTRESS_SUPPLY_API_URL` env var — mirroring the
+ * kernel vocabulary resolver's own `SUPPLY_API_URL` feature flag — rather
+ * than the always-configured `KERNEL_URL`. This keeps lot materialization
+ * an explicit per-environment opt-in that matches the kernel-side flag it
+ * is meant to complement (both were UNSET everywhere as of xprize#88).
+ *
+ * Degrades gracefully when unset: logs a warning and skips the call
+ * entirely rather than throwing, so a missing env var can never break the
+ * inference confirm response that already succeeded (the signed attestation
+ * is the source of truth — this lot is only a derived, additive index).
+ *
+ * `attestationId` must be the acting user's own session attestation.
+ */
+export async function materializeInferenceSupplyLot(
+  request: MaterializeInferenceLotRequest,
+  attestationId: string,
+): Promise<SupplyStageResponse | undefined> {
+  const supplyApiUrl = process.env.AGRIFORTRESS_SUPPLY_API_URL;
+  if (supplyApiUrl === undefined || supplyApiUrl === '') {
+    console.warn(
+      '[supply] AGRIFORTRESS_SUPPLY_API_URL not configured — supply lot not materialized',
+    );
+    return undefined;
+  }
+
+  // #1820/#1821 — same DID guard as confirmDelivery: never forward a blank
+  // or non-DID recipientDid.
+  const { recipientDid, ...rest } = request;
+  const outgoing = looksLikeDid(recipientDid) ? { ...rest, recipientDid } : rest;
+
+  const res = await fetchKernelAtUrl(
+    supplyApiUrl,
+    '/supply/api/received',
+    { method: 'POST', body: JSON.stringify(outgoing) },
+    attestationId,
+  );
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
+    throw new Error(
+      `supply.received (inference bridge) failed: ${res.status} ${data.error ?? res.statusText}`,
+    );
   }
 
   return res.json() as Promise<SupplyStageResponse>;

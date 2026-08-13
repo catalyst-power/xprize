@@ -155,6 +155,45 @@ describe('fetchKernel', () => {
 });
 
 // ---------------------------------------------------------------------------
+// fetchKernelAtUrl (xprize#88 — inference→supply bridge)
+// ---------------------------------------------------------------------------
+
+describe('fetchKernelAtUrl', () => {
+  it('targets the explicit base URL instead of KERNEL_URL', async () => {
+    const fetchMock = stubDataFetch();
+    const { fetchKernelAtUrl } = await import('./client');
+
+    await fetchKernelAtUrl(
+      'https://dev-jin.imajin.ai',
+      '/supply/api/received',
+      { method: 'POST', body: '{}' },
+      'att-scott-456',
+    );
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [url, opts] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://dev-jin.imajin.ai/supply/api/received');
+    expect((opts.headers as Record<string, string>).Authorization).toBe(
+      'Bearer token-for-att-scott-456',
+    );
+    expect((opts.headers as Record<string, string>)['X-App-DID']).toBe('did:imajin:testapp');
+  });
+
+  it('does not affect KERNEL_URL-based fetchKernel calls for the same attestationId', async () => {
+    const fetchMock = stubDataFetch();
+    const { fetchKernel, fetchKernelAtUrl } = await import('./client');
+
+    await fetchKernelAtUrl('https://dev-jin.imajin.ai', '/supply/api/received', undefined, 'att-scott');
+    await fetchKernel('/supply/api/lots', undefined, 'att-scott');
+
+    const [overrideUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [defaultUrl] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(overrideUrl).toBe('https://dev-jin.imajin.ai/supply/api/received');
+    expect(defaultUrl).toBe('https://test.imajin.ai/supply/api/lots');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // fetchKernelAsSelf
 // ---------------------------------------------------------------------------
 

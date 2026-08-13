@@ -26,6 +26,10 @@ import { getSession } from '@/lib/session';
 import { confirmInference, type ConfirmIntentBody } from '@/lib/inference';
 import { sendDirectMessage } from '@/lib/kernel/chat';
 import { cacheRecipientDid } from '@/lib/deliveryNotifyStore';
+import {
+  materializeInferenceSupplyLot,
+  type MaterializeInferenceLotRequest,
+} from '@/lib/supply';
 
 export const dynamic = 'force-dynamic';
 
@@ -35,6 +39,35 @@ function buildDeliveryNotificationMessage(correlationId: string): string {
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? DEFAULT_APP_URL).replace(/\/$/, '');
   const deliveryUrl = `${appUrl}/dashboard?lot=${encodeURIComponent(correlationId)}`;
   return `A delivery attestation is awaiting your signature in AgriFortress: ${deliveryUrl}`;
+}
+
+/**
+ * Build the supply-lot materialization request (xprize#88) from the
+ * confirmed delivery card and the resolved lot correlationId. Returns
+ * undefined when there's nothing valid to materialize — no correlationId
+ * yet, no confirmed body (bare confirm call, e.g. tests), or no valid line
+ * item — rather than sending a request the kernel would 400 on.
+ *
+ * Multi-line manifests (xprize#56) materialize only the first line's
+ * product/qty/unit — the supply domain's declared/received schema is
+ * still single-commodity per lot; a multi-commodity lot is a follow-up.
+ */
+function buildMaterializeRequest(
+  externalId: string,
+  body: ConfirmIntentBody | undefined,
+): MaterializeInferenceLotRequest | undefined {
+  if (externalId === '') return undefined;
+
+  const [primaryLine] = body?.lines ?? [];
+  if (primaryLine === undefined || primaryLine.product.label === '') return undefined;
+
+  return {
+    lotId: externalId,
+    commodity: primaryLine.product.label,
+    quantity: primaryLine.qty,
+    unit: primaryLine.unit,
+    ...(body?.recipient !== undefined && body.recipient !== '' ? { recipientDid: body.recipient } : {}),
+  };
 }
 
 /**
@@ -69,6 +102,21 @@ export async function POST(
 
   try {
     const result = await confirmInference(sessionId, user.attestationId, body);
+
+    // Materialize the supply lot (xprize#88) — the inference vocabulary
+    // resolver only signs the attestation, it never creates the supply-domain
+    // lot record that collectRecipientDids()/RecentDeliveries read from. This
+    // is additive/derived (AGENTS.md §3: the signed attestation above is
+    // already the source of truth), so a failure here is logged and never
+    // turns an already-successful confirm into an error response.
+    const materializeRequest = buildMaterializeRequest(result.externalId, body);
+    if (materializeRequest !== undefined) {
+      try {
+        await materializeInferenceSupplyLot(materializeRequest, user.attestationId);
+      } catch (err) {
+        console.error('[inference/confirm] Failed to materialize supply lot:', err);
+      }
+    }
 
     // Counterparty notification (xprize#73) — the attestation is already
     // signed at this point; a failed DM must never look like a failed
